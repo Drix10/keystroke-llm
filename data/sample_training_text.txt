@@ -1,0 +1,32 @@
+The quick brown fox jumps over the lazy dog.
+A wizard's job is to vex chumps quickly in fog.
+Pack my box with five dozen liquor jugs.
+How razorback-jumping frogs can level six piqued gymnasts!
+Jackdaws love my big sphinx of quartz.
+Predictive keystroke lighting makes typing responsive, intuitive, and visually pleasing.
+Language models learn representations of sequences by predicting the next token.
+In character level transformers, each token is an individual letter, number, or symbol.
+Self attention allows every character to query preceding characters in the context window.
+The dot product of queries and keys produces raw attention scores.
+Applying a causal mask ensures autoregressive prediction without cheating future characters.
+Residual connections prevent gradient degradation and ease optimization.
+The feed forward network provides non-linear feature transformation.
+Hardware control sends RGB lighting packets directly over wired USB to the keyboard.
+def hello_world():
+    print("Hello from Predictive Key Lights!")
+    return True
+
+for i in range(10):
+    if i % 2 == 0:
+        print(f"Even index: {i}")
+
+The Kreo Hive mechanical keyboard features per-key RGB control.
+Typing fast requires immediate visual feedback without latency.
+When you press a key, the rolling buffer shifts by one position.
+Top five most probable characters are illuminated on the keyboard.
+Rank one is bright cyan, rank two is emerald green, rank three is golden yellow.
+Natural language contains frequent n-grams like 'th', 'he', 'in', 'er', 'an', 're', 'ed', 'on', 'es', 'st'.
+Programming languages feature indentation, brackets, semicolons, and identifiers.
+Machine learning transforms raw signals into probabilistic predictions.
+Deep neural networks optimize parameters using gradient descent and cross-entropy loss.
+Every character typed moves the state forward in time.

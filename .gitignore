@@ -1,0 +1,19 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Environments
+.venv/
+venv/
+ENV/
+
+# Temporary locks & checkpoints (keep default checkpoints if committed)
+*.lock
+/tmp/
+
+# OS specific
+.DS_Store
+Thumbs.db
