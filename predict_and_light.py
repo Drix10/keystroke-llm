@@ -211,7 +211,12 @@ class PredictiveKeyLightsApp:
         self.model = TinyTransformer.load_checkpoint(checkpoint_path)
         # Clamp context length to model sequence length to avoid shape assertion failures
         self.context_len = min(max(1, context_len), self.model.seq_len)
-        self.tokenizer = CharTokenizer(getattr(self.model, "vocab", None) or get_default_vocab())
+        vocab = getattr(self.model, "vocab", None) or get_default_vocab()
+        if len(vocab) > self.model.vocab_size:
+            raise ValueError(
+                f"Vocabulary size ({len(vocab)}) exceeds model capacity ({self.model.vocab_size})."
+            )
+        self.tokenizer = CharTokenizer(vocab=vocab)
         self.kbd = KeyboardController(profile_name=profile_name, mock=mock)
 
         self.key_queue = queue.Queue(maxsize=128)
@@ -310,7 +315,7 @@ class PredictiveKeyLightsApp:
             key_name = char_to_key_name(ch)
             color = RANK_COLORS[min(rank, len(RANK_COLORS) - 1)]
 
-            if key_name:
+            if key_name and key_name not in key_colors:
                 key_colors[key_name] = color
 
             label = repr(ch) if ch in (" ", "\n", "\t") else f"'{ch}'"

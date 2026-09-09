@@ -189,6 +189,7 @@ class KeyboardController:
                         old_pid = int(f.read().strip())
                     if _is_pid_running(old_pid) and old_pid != os.getpid():
                         print(f"[Warning] Another instance (PID {old_pid}) is active.", file=sys.stderr)
+                        return
                     else:
                         os.remove(self.lockfile_path)
                 except Exception:

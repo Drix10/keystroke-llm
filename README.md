@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Predictive next-character Transformer running live on the Kreo Hive 75 mechanical keyboard.</strong><br />
-  From raw OS keystroke telemetry to zero-dependency neural inference to per-key USB RGB illumination in under 2ms.
+  From raw OS keystroke telemetry to zero-dependency neural inference to per-key USB RGB illumination; neural forward inference is measured at about 0.044ms, while end-to-end latency depends on OS scheduling and USB hardware.
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@ Keystroke-LLM pairs an educational character-level Causal Transformer written in
 
 1. **Zero-Framework Causal Transformer (`model.py`):** Implemented completely from scratch in pure NumPy without PyTorch, TensorFlow, or ONNX. Features learnable character embeddings, **learned positional embeddings** (`W_pos`), scaled dot-product attention with strict upper-triangular causal masking, ReLU feed-forward blocks, dual residual connections, and numerically stable softmax classification. Weights are Xavier/Glorot initialized. Includes a `generate()` method with temperature and nucleus (top-p) sampling.
 2. **Deterministic Kreo Hive 75 HID Driver (`hardware_controller.py`):** Directly controls hardware LEDs via the native EVision vendor interface (`0x320F:0x5055`, Usage Page `0xFF1C`, Report ID 4, 64-byte packets, 16-bit sum checksum). Runs an internal 10 Hz dynamic frame stream (`CMD 0x12`) to prevent firmware timeout blackouts. Reconnection is owned exclusively by the keepalive thread to eliminate lock races.
-3. **Global Low-Latency Ingestion (`predict_and_light.py`):** Asynchronous OS-level keyboard hooks (`pynput`) intercept keystrokes system-wide across any focused application (browsers, IDEs, games, terminals) with sub-millisecond queuing and zero typing lag.
+3. **Global Low-Latency Ingestion (`predict_and_light.py`):** Asynchronous OS-level keyboard hooks (`pynput`) intercept keystrokes system-wide across any focused application (browsers, IDEs, games, terminals). A bounded queue decouples capture from prediction; if it fills, excess incoming events are dropped while capture remains non-blocking.
 4. **Multi-Scale Context Training Engine (`train.py`):** Trains character-level models across multi-scale prefix windows ($1 \le T \le 12$), with a configurable **validation split** (default 10%), per-epoch val loss reporting, CSV loss logging, a `--seed` flag for reproducibility, and a configurable `--stride`. Supports both exact analytical backpropagation with full **Adam optimizer state** (checkpointed) and educational heuristic optimization.
 5. **Exact PCB Matrix Slot Mapping (`profiles/hive75.json`):** Verified mapping of all 83 physical keys to exact hardware LED memory slots across 6 matrix rows, ensuring zero offset errors or dead switches.
 6. **Graceful Fallback & Mock Emulation:** Automatically detects physical hardware on startup; when unplugged or running in non-hardware environments, seamlessly switches to an interactive terminal-based RGB keyboard emulator.
@@ -80,7 +80,7 @@ flowchart LR
    Top-K Softmax Probabilities (Next: 'e' 62%, 'a' 16%)
              │
              ▼
-   Matrix Slot Translation (Key 'e' ──► Slot Index 26)
+  Matrix Slot Translation (Key 'e' ──► Slot Index 45)
              │
              ▼
    USB HID CMD 0x12 Dynamic Frame Stream (10 Hz)
@@ -165,7 +165,7 @@ Last Token Attention Focus:
 |---|---|---|
 | **Backlight (Rest)** | `#FFFFFF` | All unpredicted keys glow at 100% full brightness solid white |
 | **Rank 1 Prediction** | `#FF0000` | The highest-probability upcoming key illuminates in vivid solid red |
-| **Rank 2–5 Predictions** | `#FF3333` | Secondary predicted candidate keys illuminate in graded soft red |
+| **Rank 2–5 Predictions** | `#FF3333`, `#FF5555`, `#FF7777`, `#FF9999` | Secondary predicted candidate keys illuminate in graded soft red |
 | **Application Exit** | Dynamic | Automatically sends mode restore packet (`0x01`) returning keyboard to default breathing animation |
 
 ---
@@ -269,7 +269,7 @@ keystroke-llm/
 ├── profiles/                    # Keyboard geometry & slot mappings
 │   └── hive75.json              # Kreo Hive 75 matrix configuration (hive65 intentionally excluded)
 ├── data/                        # Training corpora
-│   ├── sample_training_text.txt # Multi-domain English & code training data (~54K chars)
+│   ├── sample_training_text.txt # Multi-domain English & code training data (~2K chars)
 │   └── README.md                # Guide on custom dataset training
 └── checkpoints/                 # Model weight matrices
     ├── model_final.npz          # Trained checkpoint (weights + full Adam state)

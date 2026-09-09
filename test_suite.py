@@ -189,8 +189,11 @@ class TestKeystrokeLLM(unittest.TestCase):
         self.assertGreater(len(valid_ds), 0)
 
     def test_08_predictive_app_lifecycle_mock(self):
+        checkpoint_path = "checkpoints/model_final.npz"
+        if not os.path.exists(checkpoint_path):
+            self.skipTest(f"Checkpoint unavailable: {checkpoint_path}")
         app = PredictiveKeyLightsApp(
-            checkpoint_path="checkpoints/model_final.npz",
+            checkpoint_path=checkpoint_path,
             profile_name="hive75",
             mock=True,
             top_k=5,
@@ -200,6 +203,20 @@ class TestKeystrokeLLM(unittest.TestCase):
             show_attn=False
         )
         try:
+            class DeterministicModel:
+                def __init__(self, vocab_size, seq_len, vocab):
+                    self.vocab_size = vocab_size
+                    self.seq_len = seq_len
+                    self.vocab = vocab
+                    self.last_attn_weights = None
+
+                def forward(self, tokens):
+                    probs = np.full(self.vocab_size, 1e-6)
+                    probs[app.tokenizer.encode_char("e")] = 0.99
+                    probs /= probs.sum()
+                    return np.zeros((len(tokens), self.vocab_size)), probs
+
+            app.model = DeterministicModel(app.model.vocab_size, app.model.seq_len, app.tokenizer.vocab)
             self.assertEqual(len(app.rolling_buffer), 0)
             app.rolling_buffer = list("hell")
             app._update_prediction()

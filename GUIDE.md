@@ -171,7 +171,7 @@ Now imagine playing that game at 100 words per minute, one letter at a time, whe
 
 When you launch `python predict_and_light.py --show-probs`:
 1. The keyboard starts with a clean, 100% white backlight.
-2. As soon as you type your first letter, the model evaluates context in $< 0.1	ext{ ms}$.
+2. As soon as you type your first letter, the model evaluates context in $< 0.1\text{ ms}$.
 3. The next probable keys immediately illuminate in red.
 4. If you pause typing, the keyboard gracefully dims back to solid white.
 5. If you make a typo and press Backspace, the model unwinds its context and instantly recalculates.
@@ -275,7 +275,7 @@ sequenceDiagram
 
 `model.py` contains an implementation of an autoregressive, single-layer causal Transformer built from mathematical first principles using NumPy arrays.
 
-### 3.1 Mathematical Foundations & Tensor Shapes
+### 4.1 Mathematical Foundations & Tensor Shapes
 
 Let:
 - $V$: Vocabulary size ($V = 98$, encompassing uppercase, lowercase, numbers, and symbols).
@@ -306,7 +306,7 @@ Let:
 
 ---
 
-### 3.2 The Self-Attention Mechanism Step-by-Step
+### 4.2 The Self-Attention Mechanism Step-by-Step
 
 Self-attention allows each character in the active typing window to dynamically focus on previous characters to establish linguistic patterns (e.g. noticing that `'q'` is almost universally followed by `'u'`).
 
@@ -347,7 +347,7 @@ Input Tokens:   ['t', 'h', 'e', ' ']
 
 ---
 
-### 3.3 Line-by-Line Code Walkthrough
+### 4.3 Line-by-Line Code Walkthrough
 
 #### Mathematical Primitives (`model.py` Lines 6–43)
 ```python
@@ -425,7 +425,7 @@ def load_checkpoint(cls, filepath):
 
 ---
 
-### 3.4 Complete Analytical Backpropagation Calculus
+### 4.4 Complete Analytical Backpropagation Calculus
 
 In `train_step_backprop()`, we compute the exact partial derivatives of the cross-entropy loss $\mathcal{L}$ with respect to every weight matrix in the Transformer.
 
@@ -610,7 +610,7 @@ Every predicted key lit up one row higher in the exact same vertical column.
 
 ### 7.3 The 21-Stride Row-Based Matrix Table
 
-Below is the verified hardware matrix mapping implemented in [`profiles/hive75.json`](file:///c:/Users/ggdri/Downloads/keystroke-llm/profiles/hive75.json):
+Below is the verified hardware matrix mapping implemented in [`profiles/hive75.json`](profiles/hive75.json):
 
 | Row | Hardware Slot Range | Key Names and Exact Physical Hardware Slots |
 | :--- | :--- | :--- |
@@ -776,7 +776,7 @@ To maintain an intuitive lighting experience:
 | :--- | :--- | :--- |
 | **Startup Empty Context** | Model predicted on space (`" "`), lighting `F4`, `Y`, `1` in red before typing began. | If `len(rolling_buffer) == 0`, inference is bypassed and keyboard remains 100% white. |
 | **Missing Background Keys** | Background fill only looped over `slot_map.values()`. Keys like `f`, `j`, `p`, `=`, `[`, `]`, `f11`, `ctrl`, `shift`, `del` stayed dark. | Populates the entire 128-slot buffer unconditionally: `bytearray([bg_r, bg_g, bg_b] * num_slots)`. |
-| **Physical Matrix Offset** | 104-key column formula shifted letters onto function and number rows (`W` $\to$ `1`, `T` $\to$ `F4`, `H` $\to$ `Y`). | Mapped all 83 switches to verified 21-stride Endorfy row-based matrix coordinates. |
+| **Physical Matrix Offset** | 104-key column formula shifted letters onto function and number rows (`W` $\to$ `1`, `T` $\to$ `F4`, `H` $\to$ `Y`). | Mapped all 83 switches to verified 21-stride Kreo Hive 75 row-based matrix coordinates. |
 | **Keystroke Hook Freezing** | `pynput.join()` stalled the thread, preventing non-blocking fallback from ever executing. | Spawns `pynput` with non-blocking `start()` while running console poller conditionally. |
 | **Ctrl+C Trapping** | `msvcrt.getch()` intercepted `\x03`, preventing process termination via Ctrl+C. | Intercepts byte `b'\x03'` in console poller and invokes `_thread.interrupt_main()`. |
 | **Carriage Return / DEL Corruption** | `\r` and `\x7f` treated as `<unk>` or failing to delete context on some terminals. | Normalizes `\r` to `\n` and `\x7f` to `\b` in `_enqueue()` before control filtering. |
