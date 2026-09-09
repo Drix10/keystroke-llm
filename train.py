@@ -1,16 +1,7 @@
-"""
-train.py - Educational Training Loop for TinyTransformer
-========================================================
-Builds a character-level sliding-window dataset, trains the model,
-demonstrates loss reduction, and saves inspectable checkpoints.
-
-Usage:
-  python train.py --epochs 20 --lr 0.02 --mode heuristic
-  python train.py --epochs 30 --lr 0.01 --mode backprop
-  python train.py --resume checkpoints/checkpoint_epoch_20.npz --epochs 10
-"""
+"""Character-level sliding-window dataset preparation and training loop."""
 
 import argparse
+import csv
 import os
 import time
 import numpy as np
@@ -19,144 +10,176 @@ from key_mapper import CharTokenizer, get_default_vocab
 from model import TinyTransformer
 
 
-def build_sliding_window_dataset(text: str, tokenizer: CharTokenizer, seq_len: int) -> list[tuple[list[int], int]]:
-    """
-    Creates (context, target) pairs using a sliding window:
-    Given `seq_len` previous characters -> predict the (seq_len + 1)-th character.
-    
-    Example with seq_len=4 on "hello":
-      (['h', 'e', 'l', 'l'], 'o')
-    """
+def build_sliding_window_dataset(text: str, tokenizer: CharTokenizer, seq_len: int, stride: int = 3) -> list[tuple[list[int], list[int]]]:
+    """Generates (input_seq, target_seq) pairs of length seq_len from text."""
     token_ids = tokenizer.encode(text)
-    examples = []
-    
-    for i in range(len(token_ids) - seq_len):
-        context = token_ids[i : i + seq_len]
-        target = token_ids[i + seq_len]
-        examples.append((context, target))
-        
-    return examples
+    if len(token_ids) <= seq_len:
+        return []
+    return [
+        (token_ids[i : i + seq_len], token_ids[i + 1 : i + seq_len + 1])
+        for i in range(0, len(token_ids) - seq_len, stride)
+    ]
 
 
-def evaluate_sample_predictions(model: TinyTransformer, tokenizer: CharTokenizer, sample_prompts: list[str], top_k: int = 3):
-    """Prints sample predictions to visually verify model learning."""
-    print("\n" + "=" * 60)
-    print("Sample Context Next-Character Predictions:")
-    print("=" * 60)
-    for prompt in sample_prompts:
-        prompt_tokens = tokenizer.encode(prompt)[-model.seq_len:]
-        _, probs = model.forward(prompt_tokens)
-        
-        # Get top-k predicted character IDs
-        top_indices = np.argsort(probs)[::-1][:top_k]
-        pred_summary = []
-        for rank, idx in enumerate(top_indices, 1):
+def evaluate_predictions(model: TinyTransformer, tokenizer: CharTokenizer, prompts: list[str], top_k: int = 3):
+    print("\n" + "=" * 55)
+    print("Sample Context Next-Character Predictions")
+    print("=" * 55)
+    for p in prompts:
+        tokens = tokenizer.encode(p)[-model.seq_len:]
+        _, probs = model.forward(tokens)
+        top = np.argsort(probs)[::-1][:top_k]
+        preds = []
+        for idx in top:
             ch = tokenizer.decode_id(idx)
-            repr_ch = repr(ch) if ch in (' ', '\n', '\t') else f"'{ch}'"
-            p = probs[idx] * 100.0
-            pred_summary.append(f"#{rank}: {repr_ch} ({p:.1f}%)")
-            
-        print(f"Context: {prompt!r:<20} -> Predictions: {', '.join(pred_summary)}")
-    print("=" * 60 + "\n")
+            rep = repr(ch) if ch in (" ", "\n", "\t") else f"'{ch}'"
+            preds.append(f"{rep} ({probs[idx]*100:.1f}%)")
+        print(f"  {p!r:<18} -> {', '.join(preds)}")
+    print("=" * 55 + "\n")
+
+
+def compute_val_loss(model: TinyTransformer, val_dataset: list[tuple[list[int], list[int]]]) -> float:
+    """Run a forward-only pass over the validation set and return mean loss."""
+    if not val_dataset:
+        return float("nan")
+    total = 0.0
+    for ctx, tgt in val_dataset:
+        _, probs = model.forward(ctx)
+        from model import softmax
+        probs_all = softmax(model.last_cache["logits"], axis=-1)
+        y_seq = np.array(tgt, dtype=int)
+        T = len(ctx)
+        losses = -np.log(np.clip(probs_all[np.arange(T), y_seq], 1e-12, 1.0))
+        total += float(np.mean(losses))
+    return total / len(val_dataset)
 
 
 def train():
-    parser = argparse.ArgumentParser(description="Train Educational Character Transformer")
-    parser.add_argument("--data", type=str, default="data/sample_training_text.txt", help="Path to training text file")
-    parser.add_argument("--epochs", type=int, default=15, help="Number of training epochs")
-    parser.add_argument("--lr", type=float, default=0.015, help="Learning rate")
-    parser.add_argument("--seq-len", type=int, default=12, help="Context sequence length (characters)")
-    parser.add_argument("--hidden-size", type=int, default=32, help="Embedding and hidden dimension")
-    parser.add_argument("--mode", type=str, choices=["heuristic", "backprop"], default="heuristic",
-                        help="Training mode: 'heuristic' (pedagogical) or 'backprop' (full multi-matrix gradients)")
-    parser.add_argument("--checkpoint-dir", type=str, default="checkpoints", help="Directory to save checkpoints")
-    parser.add_argument("--resume", type=str, default=None, help="Path to existing checkpoint to continue training")
+    parser = argparse.ArgumentParser(description="Train TinyTransformer on character data")
+    parser.add_argument("--data", type=str, default="data/sample_training_text.txt", help="Path to training text")
+    parser.add_argument("--epochs", type=int, default=10, help="Epoch count")
+    parser.add_argument("--lr", type=float, default=0.003, help="Learning rate (Adam default: 0.003)")
+    parser.add_argument("--seq-len", type=int, default=12, help="Context length in characters")
+    parser.add_argument("--hidden-size", type=int, default=32, help="Transformer hidden size")
+    parser.add_argument("--stride", type=int, default=3, help="Sliding window stride for dataset construction")
+    parser.add_argument("--mode", type=str, choices=["heuristic", "backprop"], default="backprop", help="Training mode")
+    parser.add_argument("--checkpoint-dir", type=str, default="checkpoints", help="Save directory")
+    parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint file")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
+    parser.add_argument("--val-split", type=float, default=0.1, help="Fraction of data held out for validation (0 to disable)")
     args = parser.parse_args()
 
+    if args.seed is not None:
+        np.random.seed(args.seed)
+        print(f"Random seed set to {args.seed}")
+
     os.makedirs(args.checkpoint_dir, exist_ok=True)
-    
-    # 1. Load Training Text
+
     if not os.path.exists(args.data):
-        raise FileNotFoundError(f"Training data file not found at {args.data}")
+        raise FileNotFoundError(
+            f"Training data not found: '{args.data}'\n"
+            f"  -> Make sure the path is correct, or pass --data <path/to/your/text.txt>"
+        )
+
     with open(args.data, "r", encoding="utf-8") as f:
         text = f.read()
-        
-    print(f"[Dataset] Loaded {len(text)} characters from {args.data}")
-    
-    # 2. Build Vocabulary (Guaranteed inclusion of full keyboard alphabet + symbols)
-    base_vocab = get_default_vocab()
-    # Add any extra unique characters from the text if not already present
-    for ch in text:
-        if ch not in base_vocab:
-            base_vocab.append(ch)
-            
-    tokenizer = CharTokenizer(vocab=base_vocab)
-    print(f"[Tokenizer] Vocabulary size: {tokenizer.vocab_size} tokens")
-    
-    # 3. Create Sliding Window Examples
-    dataset = build_sliding_window_dataset(text, tokenizer, seq_len=args.seq_len)
-    print(f"[Dataset] Created {len(dataset)} training samples (Context: {args.seq_len} chars -> Target: 1 char)")
-    
-    # 4. Initialize or Resume Model
+
     if args.resume:
-        print(f"[Model] Resuming from checkpoint: {args.resume}")
+        print(f"Resuming model from {args.resume}")
         model = TinyTransformer.load_checkpoint(args.resume)
+        if model.seq_len != args.seq_len:
+            raise ValueError(
+                f"Checkpoint sequence length ({model.seq_len}) does not match args.seq_len ({args.seq_len})."
+            )
+        if getattr(model, "vocab", None) is not None:
+            tokenizer = CharTokenizer(vocab=model.vocab)
+        else:
+            vocab = get_default_vocab()
+            for ch in text:
+                if ch not in vocab:
+                    vocab.append(ch)
+            tokenizer = CharTokenizer(vocab=vocab)
+        if model.vocab_size != tokenizer.vocab_size:
+            raise ValueError(
+                f"Checkpoint vocab size ({model.vocab_size}) does not match tokenizer vocab size ({tokenizer.vocab_size})."
+            )
     else:
-        print(f"[Model] Initializing fresh TinyTransformer (vocab={tokenizer.vocab_size}, hidden={args.hidden_size}, seq_len={args.seq_len})")
+        # Build character vocabulary ensuring full keyboard symbol coverage
+        vocab = get_default_vocab()
+        for ch in text:
+            if ch not in vocab:
+                vocab.append(ch)
+        tokenizer = CharTokenizer(vocab=vocab)
         model = TinyTransformer(
             vocab_size=tokenizer.vocab_size,
             hidden_size=args.hidden_size,
-            seq_len=args.seq_len,
-            init_scale=0.1
+            seq_len=args.seq_len
         )
-        
-    # Test sample prompts before training
+
+    dataset = build_sliding_window_dataset(text, tokenizer, seq_len=args.seq_len, stride=args.stride)
+
+    if not dataset:
+        raise ValueError(
+            f"Dataset is empty! Input text ({len(text)} chars) must contain more than seq_len ({args.seq_len}) characters."
+        )
+
+    # Validation split — hold out the last val_split fraction (keeps temporal order intact)
+    val_size = int(len(dataset) * args.val_split) if args.val_split > 0 else 0
+    train_dataset = dataset[: len(dataset) - val_size]
+    val_dataset = dataset[len(dataset) - val_size :]
+    print(f"Loaded {len(text)} characters | train: {len(train_dataset)}, val: {len(val_dataset)} samples | vocab={tokenizer.vocab_size}")
+
+    if not train_dataset:
+        raise ValueError("Training split is empty after validation holdout. Use a longer text or reduce --val-split.")
+
     test_prompts = ["The qui", "def hel", "self at", "Kreo Hi"]
-    print("\n[Baseline] Initial predictions before training:")
-    evaluate_sample_predictions(model, tokenizer, test_prompts)
-    
-    # 5. Training Loop
-    print(f"[Training] Starting training for {args.epochs} epochs in '{args.mode}' mode (lr={args.lr})...\n")
-    start_time = time.time()
-    
+    print("Initial baseline:")
+    evaluate_predictions(model, tokenizer, test_prompts)
+
+    # CSV loss log
+    csv_path = os.path.join(args.checkpoint_dir, "loss_log.csv")
+    csv_file = open(csv_path, "w", newline="", encoding="utf-8")
+    csv_writer = csv.writer(csv_file)
+    csv_writer.writerow(["epoch", "train_loss", "val_loss", "time_s"])
+
+    print(f"Training for {args.epochs} epochs in '{args.mode}' mode (lr={args.lr}, stride={args.stride})...")
+    start = time.time()
+
     for epoch in range(1, args.epochs + 1):
-        # Shuffle dataset each epoch for better gradient updates
-        indices = np.random.permutation(len(dataset))
-        epoch_losses = []
-        epoch_start = time.time()
-        
+        indices = np.random.permutation(len(train_dataset))
+        losses = []
+        ep_start = time.time()
+
         for idx in indices:
-            context, target = dataset[idx]
+            ctx, tgt = train_dataset[idx]
             if args.mode == "heuristic":
-                loss = model.train_step_heuristic(context, target, lr=args.lr)
+                loss = model.train_step_heuristic(ctx, tgt, lr=args.lr)
             else:
-                loss = model.train_step_backprop(context, target, lr=args.lr)
-            epoch_losses.append(loss)
-            
-        avg_loss = float(np.mean(epoch_losses))
-        epoch_duration = time.time() - epoch_start
-        
-        # Display progress
-        print(f"Epoch {epoch:2d}/{args.epochs:2d} | Avg Loss: {avg_loss:.4f} | Time: {epoch_duration:.2f}s")
-        
-        # Periodic evaluation & checkpoint saving
+                loss = model.train_step_backprop(ctx, tgt, lr=args.lr)
+            losses.append(loss)
+
+        avg_loss = float(np.mean(losses))
+        val_loss = compute_val_loss(model, val_dataset)
+        ep_time = time.time() - ep_start
+        val_str = f"{val_loss:.4f}" if not np.isnan(val_loss) else "n/a"
+        print(f"Epoch {epoch:2d}/{args.epochs:2d} | Train Loss: {avg_loss:.4f} | Val Loss: {val_str} | Time: {ep_time:.2f}s")
+        csv_writer.writerow([epoch, f"{avg_loss:.6f}", f"{val_loss:.6f}", f"{ep_time:.2f}"])
+        csv_file.flush()
+
         if epoch % 5 == 0 or epoch == args.epochs:
             ckpt_path = os.path.join(args.checkpoint_dir, f"model_{args.mode}_epoch_{epoch}.npz")
-            model.save_checkpoint(ckpt_path)
-            print(f"  -> Checkpoint saved to {ckpt_path}")
-            
-    total_time = time.time() - start_time
-    print(f"\n[Done] Training completed in {total_time:.2f} seconds.")
-    
-    # Final evaluation
-    print("\n[Evaluation] Final predictions after training:")
-    evaluate_sample_predictions(model, tokenizer, test_prompts)
-    
-    # Save primary model checkpoint
+            model.save_checkpoint(ckpt_path, vocab=tokenizer.vocab)
+
+    csv_file.close()
+    print(f"\nFinished training in {time.time() - start:.2f}s")
+    print(f"Loss log saved to {csv_path}")
+    evaluate_predictions(model, tokenizer, test_prompts)
+
     final_path = os.path.join(args.checkpoint_dir, "model_final.npz")
-    model.save_checkpoint(final_path)
-    print(f"[Checkpoint] Primary model saved to {final_path}")
+    model.save_checkpoint(final_path, vocab=tokenizer.vocab)
+    print(f"Saved primary checkpoint to {final_path}")
 
 
 if __name__ == "__main__":
     train()
+

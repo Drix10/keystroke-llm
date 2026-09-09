@@ -1,21 +1,4 @@
-"""
-predict_and_light.py - Real-Time Keystroke Inference and Keyboard Lighting
-==========================================================================
-Captures live user keystrokes, runs the educational TinyTransformer model,
-predicts the top-K most likely next characters, and dynamically illuminates
-the corresponding physical keys on the Kreo Hive keyboard over wired USB.
-
-Features:
-  - Asynchronous non-blocking architecture (never blocks or delays typing)
-  - Color rank mapping (Rank 1: Cyan, Rank 2: Emerald, Rank 3: Amber, etc.)
-  - Attention matrix visualization (ASCII heatmap of context weights)
-  - Seamless recovery on USB drop / reconnect
-  - Mock mode for development without hardware
-
-Usage:
-  python predict_and_light.py --checkpoint checkpoints/model_final.npz --profile hive75 --top-k 5
-  python predict_and_light.py --mock --show-probs --show-attn
-"""
+"""Real-time keystroke capture, Transformer inference, and keyboard lighting."""
 
 import argparse
 import os
@@ -23,7 +6,7 @@ import queue
 import sys
 import threading
 import time
-from typing import List, Tuple
+from typing import List
 
 import numpy as np
 
@@ -31,303 +14,341 @@ from hardware_controller import KeyboardController
 from key_mapper import CharTokenizer, char_to_key_name, get_default_vocab
 from model import TinyTransformer
 
-# Vibrant color palette for prediction ranks (Rank 1 -> Rank 5)
+# Color palette for predicted keys: Rank 1 is vivid solid red, ranks 2-5 are graded soft red
 RANK_COLORS = [
-    "00FFFF",  # Rank 1: Electric Cyan
-    "00FF66",  # Rank 2: Vibrant Emerald
-    "FFD700",  # Rank 3: Golden Yellow
-    "FF007F",  # Rank 4: Vivid Magenta
-    "7F00FF",  # Rank 5: Deep Violet
+    "FF0000",  # Rank 1: Solid Vivid Red
+    "FF3333",  # Rank 2: Bright Red
+    "FF5555",  # Rank 3: Soft Red
+    "FF7777",  # Rank 4: Light Red
+    "FF9999",  # Rank 5: Pale Red
 ]
 
 
 def render_attention_matrix(tokens: List[str], attn_weights: np.ndarray):
-    """
-    Renders an educational ASCII heatmap of the causal attention matrix.
-    attn_weights shape: [T, T]
-    """
+    """Prints an ASCII causal attention heatmap for the active context."""
     T = len(tokens)
-    print("\n--- Attention Weights Matrix (Causal Focus) ---")
-    
-    # Print column header
+    print("\n--- Attention Weights Matrix ---")
     header = "     " + " ".join([f"{repr(t)[1:-1]:>3}" for t in tokens])
     print(header)
     print("    " + "-" * (len(header) - 4))
-    
-    # Gradient shades
+
     shades = " .:-=+*#%@"
-    
     for i in range(T):
-        row_str = f"{repr(tokens[i])[1:-1]:>3} |"
+        row = f"{repr(tokens[i])[1:-1]:>3} |"
         for j in range(T):
             if j > i:
-                row_str += "    "  # Causal mask (future)
+                row += "    "
             else:
                 val = attn_weights[i, j]
-                shade_idx = min(len(shades) - 1, int(val * len(shades)))
-                row_str += f"  {shades[shade_idx]} "
-        print(row_str)
-        
-    # Last token focus (what influenced the current prediction)
+                shade = shades[min(len(shades) - 1, int(val * len(shades)))]
+                row += f"  {shade} "
+        print(row)
+
     last_row = attn_weights[-1, :]
-    print("\nLast Character Attention Focus:")
-    focus_items = []
-    for t, weight in zip(tokens, last_row):
-        focus_items.append(f"{repr(t)[1:-1]}: {weight*100:.1f}%")
-    print("  " + " | ".join(focus_items))
-    print("-" * 48 + "\n")
+    focus = " | ".join([f"{repr(t)[1:-1]}: {w*100:.1f}%" for t, w in zip(tokens, last_row)])
+    print(f"\nLast Character Attention Focus:\n  {focus}\n" + "-" * 40)
+
+
+import _thread
 
 
 class LowLatencyInputReader:
-    """
-    Cross-platform, low-latency keystroke capturer.
-    Uses pynput or termios on Linux, msvcrt on Windows, with fallback stdin.
-    """
+    """Asynchronous, non-blocking keystroke reader across Linux and Windows."""
+
     def __init__(self, key_queue: queue.Queue):
         self.key_queue = key_queue
         self.running = True
-        self.thread = threading.Thread(target=self._reader_worker, daemon=True)
-        self.thread.start()
+        self._last_key_time = {}
+        self.listener = None
+        self._start_capture()
 
-    def _reader_worker(self):
-        # 1. Try pynput for system-wide background hook
+    def _start_capture(self):
+        # 1. Global hook via pynput if available
         try:
             from pynput import keyboard
 
             def on_press(key):
                 if not self.running:
                     return False
+                ch = None
                 try:
-                    if hasattr(key, 'char') and key.char is not None:
-                        self.key_queue.put(key.char)
+                    if hasattr(key, "char") and key.char:
+                        ch = key.char
                     elif key == keyboard.Key.space:
-                        self.key_queue.put(' ')
+                        ch = " "
                     elif key == keyboard.Key.enter:
-                        self.key_queue.put('\n')
+                        ch = "\n"
                     elif key == keyboard.Key.tab:
-                        self.key_queue.put('\t')
+                        ch = "\t"
                     elif key == keyboard.Key.backspace:
-                        self.key_queue.put('\b')
+                        ch = "\b"
                 except Exception:
                     pass
 
-            with keyboard.Listener(on_press=on_press) as listener:
-                listener.join()
-                return
-        except (ImportError, Exception):
-            pass
+                if ch:
+                    self._enqueue(ch)
 
-        # 2. Linux termios fallback (terminal raw mode)
-        if os.name == "posix":
-            import select
-            import termios
-            import tty
-            
-            fd = sys.stdin.fileno()
-            old_settings = termios.tcgetattr(fd)
+            self.listener = keyboard.Listener(on_press=on_press)
+            self.listener.daemon = True
+            self.listener.start()
+        except Exception:
+            self.listener = None
+
+        # 2. Worker thread for stdin / msvcrt console input (fallback if pynput is unavailable)
+        if self.listener is None:
+            self.thread = threading.Thread(target=self._worker, daemon=True)
+            self.thread.start()
+        else:
+            self.thread = None
+
+    def _enqueue(self, ch: str):
+        # Normalize carriage return to newline and DEL to backspace
+        if ch == "\r":
+            ch = "\n"
+        elif ch == "\x7f":
+            ch = "\b"
+
+        # Check for Ctrl+C
+        if ch == "\x03":
             try:
-                tty.setcbreak(fd)
-                while self.running:
-                    r, _, _ = select.select([sys.stdin], [], [], 0.05)
-                    if r:
-                        ch = sys.stdin.read(1)
-                        if ch:
-                            self.key_queue.put(ch)
-            finally:
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                _thread.interrupt_main()
+            except Exception:
+                pass
             return
 
-        # 3. Windows msvcrt fallback
+        # Ignore unprintable control characters except whitespace / backspace
+        if ord(ch) < 32 and ch not in ("\n", "\t", "\b"):
+            return
+
+        # Debounce: avoid duplicate events if identical key fires within 15ms
+        now = time.time()
+        last_t = self._last_key_time.get(ch, 0.0)
+        if (now - last_t) > 0.015:
+            self._last_key_time[ch] = now
+            try:
+                self.key_queue.put_nowait(ch)
+            except queue.Full:
+                pass
+
+    def _worker(self):
+        # Direct console input reader
         if os.name == "nt":
             import msvcrt
             while self.running:
                 if msvcrt.kbhit():
                     ch = msvcrt.getch()
-                    try:
-                        decoded = ch.decode("utf-8")
-                        self.key_queue.put(decoded)
-                    except Exception:
-                        pass
+                    if ch == b'\x03':  # Ctrl+C from console
+                        try:
+                            _thread.interrupt_main()
+                        except Exception:
+                            pass
+                        break
+                    elif ch in (b'\x00', b'\xe0'):
+                        msvcrt.getch()  # discard special prefix
+                    else:
+                        try:
+                            decoded = ch.decode("utf-8", errors="ignore")
+                            if decoded:
+                                self._enqueue(decoded)
+                        except Exception:
+                            pass
                 else:
                     time.sleep(0.01)
             return
 
+        if os.name == "posix":
+            import select
+            import termios
+            import tty
+
+            fd = sys.stdin.fileno()
+            try:
+                old = termios.tcgetattr(fd)
+                tty.setcbreak(fd)
+                try:
+                    while self.running:
+                        r, _, _ = select.select([sys.stdin], [], [], 0.05)
+                        if r:
+                            ch = sys.stdin.read(1)
+                            if ch:
+                                self._enqueue(ch)
+                finally:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            except Exception:
+                pass
+
     def stop(self):
         self.running = False
+        if self.listener:
+            try:
+                self.listener.stop()
+            except Exception:
+                pass
+        if hasattr(self, "thread") and self.thread is not None and self.thread.is_alive():
+            try:
+                self.thread.join(timeout=0.3)
+            except Exception:
+                pass
 
 
 class PredictiveKeyLightsApp:
-    """
-    Main controller coordinating input capture, transformer inference,
-    and keyboard RGB hardware updates.
-    """
+    """Coordinates keystroke ingestion, Transformer inference, and RGB lighting."""
+
     def __init__(self, checkpoint_path: str, profile_name: str = "hive75",
-                 top_k: int = 5, brightness: float = 0.8,
+                 top_k: int = 5, brightness: float = 1.0,
                  context_len: int = 12, show_probs: bool = False,
                  show_attn: bool = False, mock: bool = False,
-                 idle_timeout: float = 8.0):
-        self.top_k = top_k
-        self.brightness = brightness
-        self.context_len = context_len
+                 idle_timeout: float = 6.0):
+        self.top_k = min(max(1, top_k), 5)
+        self.brightness = max(0.0, min(1.0, brightness))
         self.show_probs = show_probs
         self.show_attn = show_attn
         self.idle_timeout = idle_timeout
-        
-        # Load Tokenizer & Model
-        print(f"[Init] Loading model checkpoint from: {checkpoint_path}")
+
         if not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(
-                f"Checkpoint {checkpoint_path} not found! Please run train.py first to create a model."
-            )
-            
+            raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path}. Run train.py first.")
+
         self.model = TinyTransformer.load_checkpoint(checkpoint_path)
-        self.tokenizer = CharTokenizer(get_default_vocab())
-        print(f"[Init] Model loaded: vocab={self.model.vocab_size}, hidden={self.model.hidden_size}, context_window={self.context_len}")
-        
-        # Initialize Hardware
+        # Clamp context length to model sequence length to avoid shape assertion failures
+        self.context_len = min(max(1, context_len), self.model.seq_len)
+        self.tokenizer = CharTokenizer(getattr(self.model, "vocab", None) or get_default_vocab())
         self.kbd = KeyboardController(profile_name=profile_name, mock=mock)
-        
-        # Keystroke state
-        self.key_queue = queue.Queue()
-        self.rolling_buffer = [" "] * self.context_len
+
+        self.key_queue = queue.Queue(maxsize=128)
+        self.rolling_buffer = []
         self.last_type_time = time.time()
         self.is_idle = False
-        
-        # Start Input Listener
+
         self.input_reader = LowLatencyInputReader(self.key_queue)
         self.running = True
 
     def run(self):
-        """Main event loop running asynchronous inference and lighting."""
-        print("\n" + "=" * 65)
-        print("  PREDICTIVE KEY LIGHTS IS ACTIVE!")
-        print("  Start typing in any window or in this terminal.")
-        print("  Watch the physical keys light up ahead of your keystrokes!")
-        print("  Press Ctrl+C to stop.")
-        print("=" * 65 + "\n")
-        
-        # Run initial prediction on space context
-        self._update_prediction()
-        
+        print("\n" + "=" * 55)
+        print("  Predictive Key Lights Active")
+        print("  Full-board clean white backlight enabled.")
+        print("  Active keystroke capture running (terminal + global).")
+        print("  Type in any window, browser, or terminal.")
+        print("  Press Ctrl+C to exit.")
+        print("=" * 55 + "\n")
+
+        # Initial state: Full keyboard in solid bright white backlight. No red keys until user types!
+        self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+        if self.show_probs:
+            sys.stdout.write("\r\033[K[Context: (empty)] -> Start typing to see predictions...")
+            sys.stdout.flush()
+
         try:
             while self.running:
-                # 1. Process all pending keys in queue (drain queue to prevent typing lag)
-                new_keystrokes = []
-                while not self.key_queue.empty():
-                    try:
-                        ch = self.key_queue.get_nowait()
-                        new_keystrokes.append(ch)
-                    except queue.Empty:
-                        break
-                        
-                if new_keystrokes:
+                try:
+                    first_ch = self.key_queue.get(timeout=0.005)
+                    new_chars = [first_ch]
+                    while not self.key_queue.empty():
+                        try:
+                            new_chars.append(self.key_queue.get_nowait())
+                        except queue.Empty:
+                            break
+                except queue.Empty:
+                    new_chars = []
+
+                if new_chars:
                     self.last_type_time = time.time()
                     self.is_idle = False
-                    for ch in new_keystrokes:
-                        if ch == '\b':  # Backspace handling
-                            if len(self.rolling_buffer) > 0:
+                    for ch in new_chars:
+                        if ch == "\b":
+                            if self.rolling_buffer:
                                 self.rolling_buffer.pop()
-                                self.rolling_buffer.insert(0, " ")
                         else:
                             self.rolling_buffer.append(ch)
-                            if len(self.rolling_buffer) > self.context_len:
-                                self.rolling_buffer.pop(0)
-                                
-                    # Run inference and update lights
-                    self._update_prediction()
+
+                    if len(self.rolling_buffer) > self.context_len:
+                        self.rolling_buffer = self.rolling_buffer[-self.context_len:]
+
+                    if self.rolling_buffer:
+                        self._update_prediction()
+                    else:
+                        # Reverted to empty context via backspace: reset all keys to solid white
+                        self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+                        if self.show_probs:
+                            sys.stdout.write("\r\033[K[Context: (empty)] -> Start typing to see predictions...")
+                            sys.stdout.flush()
                 else:
-                    # Check for idle timeout
+                    # Idle timeout: return to clean white backlight when typing is paused
                     if not self.is_idle and (time.time() - self.last_type_time > self.idle_timeout):
                         self.is_idle = True
-                        self._handle_idle()
-                        
-                time.sleep(0.01)  # 10ms pacing (~100Hz tick)
-                
+                        self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+                        if self.show_probs and self.rolling_buffer:
+                            ctx = "".join(self.rolling_buffer)[-12:]
+                            sys.stdout.write(f"\r\033[K[Context: {ctx!r:<12}] -> (Idle pause - keys white)")
+                            sys.stdout.flush()
+
         except KeyboardInterrupt:
-            print("\n[PredictiveKeyLights] Shutting down...")
+            pass
         finally:
             self.cleanup()
 
     def _update_prediction(self):
-        """Runs the transformer forward pass and illuminates top-K keys."""
-        # 1. Encode context buffer
-        token_ids = [self.tokenizer.encode_char(c) for c in self.rolling_buffer]
-        
-        # 2. Forward pass through TinyTransformer
-        _, probs = self.model.forward(token_ids)
-        
-        # Check for model uncertainty: if maximum probability is very low
-        max_prob = float(np.max(probs))
-        if max_prob < 0.02:  # Extremely diffuse distribution
-            self.kbd.clear()
+        if not self.rolling_buffer:
+            self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
             return
 
-        # 3. Select Top-K predictions
-        top_indices = np.argsort(probs)[::-1][:self.top_k]
-        
-        key_colors = {}
-        log_predictions = []
-        
-        for rank, token_id in enumerate(top_indices):
-            char_pred = self.tokenizer.decode_id(token_id)
-            prob = probs[token_id]
-            
-            # Map character to physical keyboard key name
-            key_name = char_to_key_name(char_pred)
-            
-            # Pick color for this rank
-            color_hex = RANK_COLORS[min(rank, len(RANK_COLORS) - 1)]
-            
-            # If key exists on the keyboard, queue for lighting
-            if key_name is not None:
-                # Probability-weighted brightness scaling
-                key_colors[key_name] = color_hex
-                
-            repr_str = repr(char_pred) if char_pred in (' ', '\n', '\t') else f"'{char_pred}'"
-            log_predictions.append(f"#{rank+1}: {repr_str} ({key_name or 'N/A'}, {prob*100:.1f}%)")
-            
-        # 4. Light the physical keys
-        self.kbd.set_key_colors(key_colors, brightness=self.brightness, clear_others=True)
-        
-        # 5. Terminal Display
-        if self.show_probs:
-            current_context = "".join(self.rolling_buffer)[-12:]
-            sys.stdout.write(f"\r\033[K[Context: {current_context!r}] -> {', '.join(log_predictions[:3])}")
-            sys.stdout.flush()
-            
-        if self.show_attn and self.model.last_attn_weights is not None:
-            render_attention_matrix(self.rolling_buffer[-8:], self.model.last_attn_weights[-8:, -8:])
+        active_chars = self.rolling_buffer[-self.context_len:]
+        tokens = [self.tokenizer.encode_char(c) for c in active_chars]
+        _, probs = self.model.forward(tokens)
 
-    def _handle_idle(self):
-        """Dims or clears lights when user pauses typing."""
+        # Ignore ambiguous or degenerate/NaN probability distributions
+        if np.isnan(probs).any() or float(np.nanmax(probs)) < 0.02:
+            self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+            return
+
+        top_indices = np.argsort(probs)[::-1][:self.top_k]
+        key_colors = {}
+        log_items = []
+
+        # Target scheme: All keys normally clean White, predicted keys illuminate in bright Red
+        for rank, token_id in enumerate(top_indices):
+            ch = self.tokenizer.decode_id(token_id)
+            key_name = char_to_key_name(ch)
+            color = RANK_COLORS[min(rank, len(RANK_COLORS) - 1)]
+
+            if key_name:
+                key_colors[key_name] = color
+
+            label = repr(ch) if ch in (" ", "\n", "\t") else f"'{ch}'"
+            log_items.append(f"#{rank+1}: {label} ({probs[token_id]*100:.1f}%)")
+
+        self.kbd.set_key_colors(key_colors, brightness=self.brightness, clear_others=True, default_background="ffffff")
+
         if self.show_probs:
-            sys.stdout.write("\r\033[K[IDLE] Lights dimmed during typing pause.")
+            ctx = "".join(self.rolling_buffer)[-12:]
+            sys.stdout.write(f"\r\033[K[Context: {ctx!r:<12}] -> Next: {', '.join(log_items[:3])}")
             sys.stdout.flush()
-        # Dim lights to 15% during idle
-        self.kbd.set_key_colors(self.kbd._current_colors, brightness=0.15, clear_others=False)
+
+        if self.show_attn and self.model.last_attn_weights is not None:
+            ctx_tokens = active_chars[-min(8, len(active_chars)):]
+            weights = self.model.last_attn_weights[-len(ctx_tokens):, -len(ctx_tokens):]
+            row_sums = weights.sum(axis=-1, keepdims=True)
+            weights = np.divide(weights, row_sums, out=np.zeros_like(weights), where=row_sums > 0)
+            render_attention_matrix(ctx_tokens, weights)
 
     def cleanup(self):
-        """Restores hardware and closes listeners."""
         self.running = False
         self.input_reader.stop()
-        self.kbd.clear()
         self.kbd.close()
-        print("[PredictiveKeyLights] Complete. LEDs turned off.")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Predictive Key Lights - Educational Keystroke Transformer")
-    parser.add_argument("--checkpoint", type=str, default="checkpoints/model_final.npz",
-                        help="Path to trained model checkpoint (.npz)")
-    parser.add_argument("--profile", type=str, default="hive75", choices=["hive75", "hive65"],
-                        help="Keyboard profile (hive75 or hive65)")
-    parser.add_argument("--top-k", type=int, default=5, help="Number of predicted keys to illuminate (1-10)")
-    parser.add_argument("--brightness", type=float, default=0.8, help="LED brightness scale (0.0 to 1.0)")
+    if os.name == "nt":
+        os.system("")  # Enable Windows virtual terminal / ANSI escape sequences
+    parser = argparse.ArgumentParser(description="Predictive Key Lights - Real-time Keystroke Lighting")
+    parser.add_argument("--checkpoint", type=str, default="checkpoints/model_final.npz", help="Model checkpoint path")
+    parser.add_argument("--profile", type=str, default="hive75", help="Keyboard profile (default: hive75)")
+    parser.add_argument("--top-k", type=int, default=5, help="Number of predicted keys to illuminate (1-5)")
+    parser.add_argument("--brightness", type=float, default=1.0, help="LED brightness scale (0.0 to 1.0)")
     parser.add_argument("--context-len", type=int, default=12, help="Context sequence length")
-    parser.add_argument("--show-probs", action="store_true", help="Print live probabilities in the terminal")
+    parser.add_argument("--show-probs", action="store_true", help="Print live top predictions to terminal")
     parser.add_argument("--show-attn", action="store_true", help="Visualize causal attention matrix")
-    parser.add_argument("--mock", action="store_true", help="Force mock hardware mode (no physical keyboard required)")
-    parser.add_argument("--idle-timeout", type=float, default=6.0, help="Seconds before dimming during pause")
+    parser.add_argument("--mock", action="store_true", help="Force mock mode (no physical keyboard required)")
+    parser.add_argument("--idle-timeout", type=float, default=6.0, help="Seconds before dimming during typing pause")
     args = parser.parse_args()
 
     app = PredictiveKeyLightsApp(
