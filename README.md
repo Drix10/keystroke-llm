@@ -22,9 +22,10 @@ Keystroke-LLM pairs an educational character-level Causal Transformer written in
 1. **Zero-Framework Causal Transformer (`model.py`):** Implemented completely from scratch in pure NumPy without PyTorch, TensorFlow, or ONNX. Features learnable character embeddings, **learned positional embeddings** (`W_pos`), scaled dot-product attention with strict upper-triangular causal masking, ReLU feed-forward blocks, dual residual connections, and numerically stable softmax classification. Weights are Xavier/Glorot initialized. Includes a `generate()` method with temperature and nucleus (top-p) sampling.
 2. **Deterministic Kreo Hive 75 HID Driver (`hardware_controller.py`):** Directly controls hardware LEDs via the native EVision vendor interface (`0x320F:0x5055`, Usage Page `0xFF1C`, Report ID 4, 64-byte packets, 16-bit sum checksum). Runs an internal 10 Hz dynamic frame stream (`CMD 0x12`) to prevent firmware timeout blackouts. Reconnection is owned exclusively by the keepalive thread to eliminate lock races.
 3. **Global Low-Latency Ingestion (`predict_and_light.py`):** Asynchronous OS-level keyboard hooks (`pynput`) intercept keystrokes system-wide across any focused application (browsers, IDEs, games, terminals). A bounded queue decouples capture from prediction; if it fills, excess incoming events are dropped while capture remains non-blocking.
-4. **Multi-Scale Context Training Engine (`train.py`):** Trains character-level models across multi-scale prefix windows ($1 \le T \le 12$), with a configurable **validation split** (default 10%), per-epoch val loss reporting, CSV loss logging, a `--seed` flag for reproducibility, and a configurable `--stride`. Supports both exact analytical backpropagation with full **Adam optimizer state** (checkpointed) and educational heuristic optimization.
-5. **Exact PCB Matrix Slot Mapping (`profiles/hive75.json`):** Verified mapping of all 83 physical keys to exact hardware LED memory slots across 6 matrix rows, ensuring zero offset errors or dead switches.
-6. **Graceful Fallback & Mock Emulation:** Automatically detects physical hardware on startup; when unplugged or running in non-hardware environments, seamlessly switches to an interactive terminal-based RGB keyboard emulator.
+4. **Auto-Pause WASD / Gaming Mode (`predict_and_light.py`):** Holding or spamming movement keys (WASD streak >= 4) or rapid repeated key holding (>= 5 repeats) automatically pauses predictive red highlights and holds a calm solid white backlight. Resumes seamlessly as soon as typing resumes or after a 1.2s pause.
+5. **Multi-Scale Context Training Engine (`train.py`):** Trains character-level models across multi-scale prefix windows ($1 \le T \le 48$), with a configurable **validation split** (default 10%), per-epoch val loss reporting, CSV loss logging, a `--seed` flag for reproducibility, and a configurable `--stride`. Supports both exact analytical backpropagation with full **Adam optimizer state** (checkpointed) and educational heuristic optimization.
+6. **Exact PCB Matrix Slot Mapping (`profiles/hive75.json`):** Verified mapping of all 82 physical keys to exact hardware LED memory slots across 6 matrix rows, ensuring zero offset errors or dead switches.
+7. **Graceful Fallback & Mock Emulation:** Automatically detects physical hardware on startup; when unplugged or running in non-hardware environments, seamlessly switches to an interactive terminal-based RGB keyboard emulator.
 
 ---
 
@@ -39,8 +40,8 @@ flowchart LR
 
     subgraph Model ["2. Educational Transformer (model.py)"]
         Buffer --> Tok["CharTokenizer"]
-        Tok --> Emb["W_emb Lookup\n[T x 32]"]
-        Tok --> Pos["W_pos Lookup\n[T x 32]"]
+        Tok --> Emb["W_emb Lookup\n[T x 64]"]
+        Tok --> Pos["W_pos Lookup\n[T x 64]"]
         Emb --> Add["+ (Token + Position)"]
         Pos --> Add
         Add --> Attn["Causal Self-Attention\n(Q, K, V & Mask)"]
@@ -68,7 +69,7 @@ flowchart LR
    Rolling Context Buffer (e.g. ['t', 'h'])
              │
              ▼
-   CharTokenizer ──► Embeddings (W_emb) [T x 32]
+   CharTokenizer ──► Embeddings (W_emb) [T x 64]
              │
              ▼
    Causal Self-Attention: Softmax((Q @ K.T) / sqrt(d) + Mask) @ V
@@ -93,13 +94,13 @@ flowchart LR
 
 ## Mathematical Formulation
 
-The model operates autoregressively on individual characters. Given an input context sequence of length $T \le 12$:
+The model operates autoregressively on individual characters. Given an input context sequence of length $T \le 48$:
 
 ### 1. Token Embeddings + Positional Encoding
 Each character is indexed into a learnable embedding matrix, and a learned position vector is added so the model knows *where* in the sequence each character sits:
 $$X_{tok} = W_{\text{emb}}[\text{tokens}], \quad X_{pos} = W_{\text{pos}}[0:T, :]$$
 $$X = X_{tok} + X_{pos}, \quad X \in \mathbb{R}^{T \times d}$$
-*(where $d=32$ is the hidden embedding dimension and $W_{\text{pos}} \in \mathbb{R}^{seq\_len \times d}$ is learned from scratch during training.)*
+*(where $d=64$ is the hidden embedding dimension and $W_{\text{pos}} \in \mathbb{R}^{seq\_len \times d}$ is learned from scratch during training.)*
 
 ### 2. Linear Projections (Queries, Keys, Values)
 Input representations are linearly projected into Query, Key, and Value spaces:
@@ -241,6 +242,9 @@ python train.py --data data/sample_training_text.txt --stride 2 --val-split 0.15
 
 | Scenario | Handling Mechanism |
 |---|---|
+| **USB Pipe Buffer Saturation** | EVision V2 firmware returns 64-byte ACK packets on write. Reading and draining the ACK report (`hid_device.read(64, 20)`) prevents USB pipe overflow and write latency spikes. |
+| **Gaming Movement (WASD Spam)** | Gaming movement inputs (WASD streak >= 4 or repeats >= 5) are auto-detected, pausing red predictive highlights and keeping the board in calm white backlight until typing resumes. |
+| **Debounce Cache Growth** | `_last_key_time` in input reader is hard-capped at 256 entries and pruned to the 128 most recent timestamps, bounding memory usage. |
 | **USB Disconnect / Firmware Reset** | `hardware_controller.py` catches `EIO` / `ENODEV` and marks the device disconnected. The keepalive thread is the sole owner of reconnection, eliminating lock-race between `_flush_frame` and the reconnect path. |
 | **Firmware Watchdog Timeout** | Continuous 10 Hz keepalive stream (`CMD 0x12`) prevents keyboard MCU from dropping back to stock animations. |
 | **Typing Faster than Inference** | Asynchronous input capture queues keystrokes in a background thread; worker drains all pending strokes before predicting, achieving sub-2ms inference with negligible typing lag under typical typing rates while dropping excess events via `queue.Full` if the bounded queue overflows. |
@@ -263,13 +267,13 @@ keystroke-llm/
 ├── model.py                     # Zero-dependency NumPy Causal Transformer (+ positional embeddings)
 ├── train.py                     # Training loop, validation split, CSV logging, Adam checkpointing
 ├── key_mapper.py                # Character tokenization and physical slot translation
-├── test_suite.py                # 8-test portable unittest suite (run: python test_suite.py)
+├── test_suite.py                # 14-test portable unittest suite (run: python test_suite.py)
 ├── requirements.txt             # Pinned runtime deps (hidapi, pynput, numpy)
 ├── GUIDE.md                     # Deep-dive beginner-friendly guide to the full system
 ├── profiles/                    # Keyboard geometry & slot mappings
 │   └── hive75.json              # Kreo Hive 75 matrix configuration (hive65 intentionally excluded)
 ├── data/                        # Training corpora
-│   ├── sample_training_text.txt # Multi-domain English & code training data (~2K chars)
+│   ├── sample_training_text.txt # Multi-domain English & code training data (~121K chars)
 │   └── README.md                # Guide on custom dataset training
 └── checkpoints/                 # Model weight matrices
     ├── model_final.npz          # Trained checkpoint (weights + full Adam state)
@@ -282,7 +286,7 @@ keystroke-llm/
 ## Technical Specifications
 
 - **Target Keyboard:** Kreo Hive 75 (`VID: 0x320F`, `PID: 0x5055`, Usage Page `0xFF1C`).
-- **Model Dimensions:** Context Length $T=12$, Embedding Dimension $d=32$, Positional Embedding $W_{pos} \in \mathbb{R}^{12 \times 32}$, Feed-Forward Hidden $2d=64$, Vocabulary $|\mathcal{V}|=98$. Weights Xavier-initialized.
+- **Model Dimensions:** Context Length $T=48$, Embedding Dimension $d=64$, Positional Embedding $W_{pos} \in \mathbb{R}^{48 \times 64}$, Feed-Forward Hidden $2d=128$, Vocabulary $|\mathcal{V}|=98$. Weights Xavier-initialized.
 - **Optimizer:** Adam ($\beta_1=0.9$, $\beta_2=0.999$, $\varepsilon=10^{-8}$, default lr `0.003`). Full optimizer state is checkpointed and restored on `--resume`.
 - **USB Protocol:** EVision V2, Report ID `0x04`, 64-byte output reports with 16-bit sum checksum (`buf[1] = sum & 0xFF`, `buf[2] = sum >> 8`).
 - **Update Frequency:** 10 Hz continuous dynamic frame transmission (`CMD 0x12`), well within hardware PWM tolerances.

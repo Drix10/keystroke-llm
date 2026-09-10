@@ -32,500 +32,494 @@
     "keys": [
       {
         "name": "esc",
-        "col": 0,
         "row": 0,
+        "col": 0,
         "slot": 0
       },
       {
         "name": "f1",
+        "row": 0,
         "col": 1,
-        "row": 0,
-        "slot": 2
-      },
-      {
-        "name": "f2",
-        "col": 2,
-        "row": 0,
-        "slot": 3
-      },
-      {
-        "name": "f3",
-        "col": 3,
-        "row": 0,
-        "slot": 4
-      },
-      {
-        "name": "f4",
-        "col": 4,
-        "row": 0,
-        "slot": 5
-      },
-      {
-        "name": "f5",
-        "col": 5,
-        "row": 0,
-        "slot": 6
-      },
-      {
-        "name": "f6",
-        "col": 6,
-        "row": 0,
-        "slot": 7
-      },
-      {
-        "name": "f7",
-        "col": 7,
-        "row": 0,
         "slot": 8
       },
       {
-        "name": "f8",
-        "col": 8,
+        "name": "f2",
         "row": 0,
-        "slot": 9
-      },
-      {
-        "name": "f9",
-        "col": 9,
-        "row": 0,
-        "slot": 10
-      },
-      {
-        "name": "f10",
-        "col": 10,
-        "row": 0,
-        "slot": 11
-      },
-      {
-        "name": "f11",
-        "col": 11,
-        "row": 0,
-        "slot": 12
-      },
-      {
-        "name": "f12",
-        "col": 12,
-        "row": 0,
-        "slot": 13
-      },
-      {
-        "name": "printscreen",
-        "col": 13,
-        "row": 0,
-        "slot": 14
-      },
-      {
-        "name": "del",
-        "col": 14,
-        "row": 0,
+        "col": 2,
         "slot": 16
       },
       {
-        "name": "grave",
-        "col": 0,
-        "row": 1,
-        "slot": 21
-      },
-      {
-        "name": "1",
-        "col": 1,
-        "row": 1,
-        "slot": 22
-      },
-      {
-        "name": "2",
-        "col": 2,
-        "row": 1,
-        "slot": 23
-      },
-      {
-        "name": "3",
+        "name": "f3",
+        "row": 0,
         "col": 3,
-        "row": 1,
         "slot": 24
       },
       {
-        "name": "4",
+        "name": "f4",
+        "row": 0,
         "col": 4,
-        "row": 1,
-        "slot": 25
-      },
-      {
-        "name": "5",
-        "col": 5,
-        "row": 1,
-        "slot": 26
-      },
-      {
-        "name": "6",
-        "col": 6,
-        "row": 1,
-        "slot": 27
-      },
-      {
-        "name": "7",
-        "col": 7,
-        "row": 1,
-        "slot": 28
-      },
-      {
-        "name": "8",
-        "col": 8,
-        "row": 1,
-        "slot": 29
-      },
-      {
-        "name": "9",
-        "col": 9,
-        "row": 1,
-        "slot": 30
-      },
-      {
-        "name": "0",
-        "col": 10,
-        "row": 1,
-        "slot": 31
-      },
-      {
-        "name": "minus",
-        "col": 11,
-        "row": 1,
         "slot": 32
       },
       {
-        "name": "equal",
-        "col": 12,
-        "row": 1,
-        "slot": 33
-      },
-      {
-        "name": "backspace",
-        "col": 13,
-        "row": 1,
-        "slot": 34
-      },
-      {
-        "name": "home",
-        "col": 14,
-        "row": 1,
-        "slot": 36
-      },
-      {
-        "name": "tab",
-        "col": 0,
-        "row": 2,
-        "slot": 42
-      },
-      {
-        "name": "q",
-        "col": 1,
-        "row": 2,
-        "slot": 43
-      },
-      {
-        "name": "w",
-        "col": 2,
-        "row": 2,
-        "slot": 44
-      },
-      {
-        "name": "e",
-        "col": 3,
-        "row": 2,
-        "slot": 45
-      },
-      {
-        "name": "r",
-        "col": 4,
-        "row": 2,
-        "slot": 46
-      },
-      {
-        "name": "t",
+        "name": "f5",
+        "row": 0,
         "col": 5,
-        "row": 2,
-        "slot": 47
+        "slot": 40
       },
       {
-        "name": "y",
+        "name": "f6",
+        "row": 0,
         "col": 6,
-        "row": 2,
         "slot": 48
       },
       {
-        "name": "u",
+        "name": "f7",
+        "row": 0,
         "col": 7,
-        "row": 2,
-        "slot": 49
-      },
-      {
-        "name": "i",
-        "col": 8,
-        "row": 2,
-        "slot": 50
-      },
-      {
-        "name": "o",
-        "col": 9,
-        "row": 2,
-        "slot": 51
-      },
-      {
-        "name": "p",
-        "col": 10,
-        "row": 2,
-        "slot": 52
-      },
-      {
-        "name": "lbracket",
-        "col": 11,
-        "row": 2,
-        "slot": 53
-      },
-      {
-        "name": "rbracket",
-        "col": 12,
-        "row": 2,
-        "slot": 54
-      },
-      {
-        "name": "backslash",
-        "col": 13,
-        "row": 2,
-        "slot": 55
-      },
-      {
-        "name": "pgup",
-        "col": 14,
-        "row": 2,
         "slot": 56
       },
       {
-        "name": "capslock",
-        "col": 0,
-        "row": 3,
-        "slot": 63
-      },
-      {
-        "name": "a",
-        "col": 1,
-        "row": 3,
+        "name": "f8",
+        "row": 0,
+        "col": 8,
         "slot": 64
       },
       {
-        "name": "s",
-        "col": 2,
-        "row": 3,
-        "slot": 65
-      },
-      {
-        "name": "d",
-        "col": 3,
-        "row": 3,
-        "slot": 66
-      },
-      {
-        "name": "f",
-        "col": 4,
-        "row": 3,
-        "slot": 67
-      },
-      {
-        "name": "g",
-        "col": 5,
-        "row": 3,
-        "slot": 68
-      },
-      {
-        "name": "h",
-        "col": 6,
-        "row": 3,
-        "slot": 69
-      },
-      {
-        "name": "j",
-        "col": 7,
-        "row": 3,
-        "slot": 70
-      },
-      {
-        "name": "k",
-        "col": 8,
-        "row": 3,
-        "slot": 71
-      },
-      {
-        "name": "l",
+        "name": "f9",
+        "row": 0,
         "col": 9,
-        "row": 3,
         "slot": 72
       },
       {
-        "name": "semicolon",
+        "name": "f10",
+        "row": 0,
         "col": 10,
-        "row": 3,
-        "slot": 73
-      },
-      {
-        "name": "quote",
-        "col": 11,
-        "row": 3,
-        "slot": 74
-      },
-      {
-        "name": "enter",
-        "col": 12,
-        "row": 3,
-        "slot": 76
-      },
-      {
-        "name": "pgdn",
-        "col": 14,
-        "row": 3,
         "slot": 80
       },
       {
-        "name": "lshift",
-        "col": 0,
-        "row": 4,
-        "slot": 84
-      },
-      {
-        "name": "z",
-        "col": 1,
-        "row": 4,
-        "slot": 86
-      },
-      {
-        "name": "x",
-        "col": 2,
-        "row": 4,
-        "slot": 87
-      },
-      {
-        "name": "c",
-        "col": 3,
-        "row": 4,
+        "name": "f11",
+        "row": 0,
+        "col": 11,
         "slot": 88
       },
       {
-        "name": "v",
+        "name": "f12",
+        "row": 0,
+        "col": 12,
+        "slot": 96
+      },
+      {
+        "name": "del",
+        "row": 0,
+        "col": 14,
+        "slot": 112
+      },
+      {
+        "name": "grave",
+        "row": 1,
+        "col": 0,
+        "slot": 1
+      },
+      {
+        "name": "1",
+        "row": 1,
+        "col": 1,
+        "slot": 9
+      },
+      {
+        "name": "2",
+        "row": 1,
+        "col": 2,
+        "slot": 17
+      },
+      {
+        "name": "3",
+        "row": 1,
+        "col": 3,
+        "slot": 25
+      },
+      {
+        "name": "4",
+        "row": 1,
         "col": 4,
-        "row": 4,
+        "slot": 33
+      },
+      {
+        "name": "5",
+        "row": 1,
+        "col": 5,
+        "slot": 41
+      },
+      {
+        "name": "6",
+        "row": 1,
+        "col": 6,
+        "slot": 49
+      },
+      {
+        "name": "7",
+        "row": 1,
+        "col": 7,
+        "slot": 57
+      },
+      {
+        "name": "8",
+        "row": 1,
+        "col": 8,
+        "slot": 65
+      },
+      {
+        "name": "9",
+        "row": 1,
+        "col": 9,
+        "slot": 73
+      },
+      {
+        "name": "0",
+        "row": 1,
+        "col": 10,
+        "slot": 81
+      },
+      {
+        "name": "minus",
+        "row": 1,
+        "col": 11,
         "slot": 89
       },
       {
-        "name": "b",
-        "col": 5,
-        "row": 4,
-        "slot": 90
-      },
-      {
-        "name": "n",
-        "col": 6,
-        "row": 4,
-        "slot": 91
-      },
-      {
-        "name": "m",
-        "col": 7,
-        "row": 4,
-        "slot": 92
-      },
-      {
-        "name": "comma",
-        "col": 8,
-        "row": 4,
-        "slot": 93
-      },
-      {
-        "name": "period",
-        "col": 9,
-        "row": 4,
-        "slot": 94
-      },
-      {
-        "name": "slash",
-        "col": 10,
-        "row": 4,
-        "slot": 95
-      },
-      {
-        "name": "rshift",
-        "col": 11,
-        "row": 4,
+        "name": "equal",
+        "row": 1,
+        "col": 12,
         "slot": 97
       },
       {
-        "name": "up",
+        "name": "backspace",
+        "row": 1,
         "col": 13,
-        "row": 4,
-        "slot": 99
-      },
-      {
-        "name": "end",
-        "col": 14,
-        "row": 4,
-        "slot": 101
-      },
-      {
-        "name": "lctrl",
-        "col": 0,
-        "row": 5,
         "slot": 105
       },
       {
-        "name": "win",
+        "name": "ins",
+        "row": 1,
+        "col": 14,
+        "slot": 113
+      },
+      {
+        "name": "tab",
+        "row": 2,
+        "col": 0,
+        "slot": 2
+      },
+      {
+        "name": "q",
+        "row": 2,
         "col": 1,
-        "row": 5,
+        "slot": 10
+      },
+      {
+        "name": "w",
+        "row": 2,
+        "col": 2,
+        "slot": 18
+      },
+      {
+        "name": "e",
+        "row": 2,
+        "col": 3,
+        "slot": 26
+      },
+      {
+        "name": "r",
+        "row": 2,
+        "col": 4,
+        "slot": 34
+      },
+      {
+        "name": "t",
+        "row": 2,
+        "col": 5,
+        "slot": 42
+      },
+      {
+        "name": "y",
+        "row": 2,
+        "col": 6,
+        "slot": 50
+      },
+      {
+        "name": "u",
+        "row": 2,
+        "col": 7,
+        "slot": 58
+      },
+      {
+        "name": "i",
+        "row": 2,
+        "col": 8,
+        "slot": 66
+      },
+      {
+        "name": "o",
+        "row": 2,
+        "col": 9,
+        "slot": 74
+      },
+      {
+        "name": "p",
+        "row": 2,
+        "col": 10,
+        "slot": 82
+      },
+      {
+        "name": "lbracket",
+        "row": 2,
+        "col": 11,
+        "slot": 90
+      },
+      {
+        "name": "rbracket",
+        "row": 2,
+        "col": 12,
+        "slot": 98
+      },
+      {
+        "name": "backslash",
+        "row": 2,
+        "col": 13,
         "slot": 106
       },
       {
-        "name": "lalt",
+        "name": "end",
+        "row": 2,
+        "col": 14,
+        "slot": 114
+      },
+      {
+        "name": "capslock",
+        "row": 3,
+        "col": 0,
+        "slot": 3
+      },
+      {
+        "name": "a",
+        "row": 3,
+        "col": 1,
+        "slot": 11
+      },
+      {
+        "name": "s",
+        "row": 3,
         "col": 2,
-        "row": 5,
+        "slot": 19
+      },
+      {
+        "name": "d",
+        "row": 3,
+        "col": 3,
+        "slot": 27
+      },
+      {
+        "name": "f",
+        "row": 3,
+        "col": 4,
+        "slot": 35
+      },
+      {
+        "name": "g",
+        "row": 3,
+        "col": 5,
+        "slot": 43
+      },
+      {
+        "name": "h",
+        "row": 3,
+        "col": 6,
+        "slot": 51
+      },
+      {
+        "name": "j",
+        "row": 3,
+        "col": 7,
+        "slot": 59
+      },
+      {
+        "name": "k",
+        "row": 3,
+        "col": 8,
+        "slot": 67
+      },
+      {
+        "name": "l",
+        "row": 3,
+        "col": 9,
+        "slot": 75
+      },
+      {
+        "name": "semicolon",
+        "row": 3,
+        "col": 10,
+        "slot": 83
+      },
+      {
+        "name": "quote",
+        "row": 3,
+        "col": 11,
+        "slot": 91
+      },
+      {
+        "name": "enter",
+        "row": 3,
+        "col": 13,
         "slot": 107
       },
       {
-        "name": "space",
-        "col": 4,
-        "row": 5,
-        "slot": 111
-      },
-      {
-        "name": "ralt",
-        "col": 7,
-        "row": 5,
+        "name": "pgup",
+        "row": 3,
+        "col": 14,
         "slot": 115
       },
       {
-        "name": "fn",
-        "col": 8,
-        "row": 5,
-        "slot": 116
+        "name": "lshift",
+        "row": 4,
+        "col": 0,
+        "slot": 12
       },
       {
-        "name": "rctrl",
+        "name": "z",
+        "row": 4,
+        "col": 1,
+        "slot": 20
+      },
+      {
+        "name": "x",
+        "row": 4,
+        "col": 2,
+        "slot": 28
+      },
+      {
+        "name": "c",
+        "row": 4,
+        "col": 3,
+        "slot": 36
+      },
+      {
+        "name": "v",
+        "row": 4,
+        "col": 4,
+        "slot": 44
+      },
+      {
+        "name": "b",
+        "row": 4,
+        "col": 5,
+        "slot": 52
+      },
+      {
+        "name": "n",
+        "row": 4,
+        "col": 6,
+        "slot": 60
+      },
+      {
+        "name": "m",
+        "row": 4,
+        "col": 7,
+        "slot": 68
+      },
+      {
+        "name": "comma",
+        "row": 4,
+        "col": 8,
+        "slot": 76
+      },
+      {
+        "name": "period",
+        "row": 4,
+        "col": 9,
+        "slot": 84
+      },
+      {
+        "name": "slash",
+        "row": 4,
         "col": 10,
-        "row": 5,
+        "slot": 92
+      },
+      {
+        "name": "rshift",
+        "row": 4,
+        "col": 12,
+        "slot": 100
+      },
+      {
+        "name": "up",
+        "row": 4,
+        "col": 13,
         "slot": 118
       },
       {
-        "name": "left",
-        "col": 12,
+        "name": "pgdn",
+        "row": 4,
+        "col": 14,
+        "slot": 122
+      },
+      {
+        "name": "lctrl",
         "row": 5,
+        "col": 0,
+        "slot": 5
+      },
+      {
+        "name": "win",
+        "row": 5,
+        "col": 1,
+        "slot": 13
+      },
+      {
+        "name": "lalt",
+        "row": 5,
+        "col": 2,
+        "slot": 21
+      },
+      {
+        "name": "space",
+        "row": 5,
+        "col": 5,
+        "slot": 45
+      },
+      {
+        "name": "ralt",
+        "row": 5,
+        "col": 9,
+        "slot": 77
+      },
+      {
+        "name": "fn",
+        "row": 5,
+        "col": 10,
+        "slot": 85
+      },
+      {
+        "name": "rctrl",
+        "row": 5,
+        "col": 11,
+        "slot": 101
+      },
+      {
+        "name": "left",
+        "row": 5,
+        "col": 12,
         "slot": 119
       },
       {
         "name": "down",
-        "col": 13,
         "row": 5,
+        "col": 13,
         "slot": 120
       },
       {
         "name": "right",
-        "col": 14,
         "row": 5,
+        "col": 14,
         "slot": 121
       }
     ]

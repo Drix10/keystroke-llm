@@ -26,6 +26,16 @@ CHAR_TO_KEY = {
 
 SHIFTED_CHARS = set('~!@#$%^&*()_+{}|:"<>?' + string.ascii_uppercase)
 
+# Valid typeable characters for next-key prediction (alphabets, digits, space, basic punctuation)
+# Excludes control codes, unmapped symbols, and non-typeable tokens
+VALID_PREDICTIVE_CHARS = set(
+    string.ascii_lowercase
+    + string.ascii_uppercase
+    + string.digits
+    + " "
+    + ".,?!'\"-;:()/_=+[]"
+)
+
 
 def char_to_key_name(ch: str) -> str | None:
     return CHAR_TO_KEY.get(ch, None)
@@ -33,6 +43,31 @@ def char_to_key_name(ch: str) -> str | None:
 
 def is_shifted(ch: str) -> bool:
     return ch in SHIFTED_CHARS
+
+
+def format_prediction_label(ch: str) -> str:
+    """Formats a predicted character for clean user-facing terminal display.
+    
+    Clarifies both the intended character and the physical target keycap.
+    """
+    if ch == " ":
+        return "[Space]"
+    if ch == "\n":
+        return "[Enter]"
+    if ch == "\t":
+        return "[Tab]"
+    if ch == "\b":
+        return "[Backspace]"
+    key = char_to_key_name(ch)
+    if not key:
+        return repr(ch)
+    # For alphabetic letters, display as the clean physical key (e.g. 'w', 'n', 'e')
+    if len(key) == 1 and key.isalpha():
+        return f"'{key}'"
+    # For shifted punctuation, clarify the physical base key
+    if is_shifted(ch) and ch != key:
+        return f"'{ch}' [Key {key.upper()}]"
+    return f"'{ch}'"
 
 
 def get_default_vocab() -> list[str]:

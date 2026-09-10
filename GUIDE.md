@@ -31,17 +31,18 @@
    - [6.2 Line-by-Line Code Walkthrough](#62-line-by-line-code-walkthrough)
 7. [Module 4: Keyboard Geometry & Physical Profiles (`profiles/hive75.json`)](#7-module-4-keyboard-geometry--physical-profiles-profileshive75json)
    - [7.1 The 75% Compact Layout Anatomy](#71-the-75-compact-layout-anatomy)
-   - [7.2 The Mystery of Key Shifting: 104-Key vs 75% Matrix](#72-the-mystery-of-key-shifting-104-key-vs-75-matrix)
-   - [7.3 The 21-Stride Row-Based Matrix Table](#73-the-21-stride-row-based-matrix-table)
+   - [7.2 PCB Matrix Architecture: The 16x8 Column-Interleaved Matrix](#72-pcb-matrix-architecture-the-16x8-column-interleaved-matrix)
+   - [7.3 Verified Physical Hardware Slot Mapping Table](#73-verified-physical-hardware-slot-mapping-table)
 8. [Module 5: Deterministic Hardware USB HID Controller (`hardware_controller.py`)](#8-module-5-deterministic-hardware-usb-hid-controller-hardware_controllerpy)
    - [8.1 EVision V2 USB Protocol Deep Dive](#81-evision-v2-usb-protocol-deep-dive)
-   - [8.2 Packet Framing & 16-Bit Checksum Calculus](#82-packet-framing--16-bit-checksum-calculus)
+   - [8.2 Packet Framing, Checksum & ACK Draining](#82-packet-framing-checksum--ack-draining)
    - [8.3 The 10 Hz Keepalive Watchdog Engine](#83-the-10-hz-keepalive-watchdog-engine)
    - [8.4 Line-by-Line Code Walkthrough](#84-line-by-line-code-walkthrough)
 9. [Module 6: Real-Time Ingestion & Predictive Lighting (`predict_and_light.py`)](#9-module-6-real-time-ingestion--predictive-lighting-predict_and_lightpy)
    - [9.1 The Dual-Engine Ingestion Architecture](#91-the-dual-engine-ingestion-architecture)
-   - [9.2 Context State Machine & Idle Dimming](#92-context-state-machine--idle-dimming)
-   - [9.3 Line-by-Line Code Walkthrough](#93-line-by-line-code-walkthrough)
+   - [9.2 Auto-Pause WASD / Gaming Detection](#92-auto-pause-wasd--gaming-detection)
+   - [9.3 Context State Machine & Idle Dimming](#93-context-state-machine--idle-dimming)
+   - [9.4 Line-by-Line Code Walkthrough](#94-line-by-line-code-walkthrough)
 10. [Edge Cases, Defenses & Reliability Engineering](#10-edge-cases-defenses--reliability-engineering)
 11. [Command-Line Reference & Cheat Sheet](#11-command-line-reference--cheat-sheet)
 
@@ -110,7 +111,7 @@ Every word you type becomes a clean sequence of numbers:
 
 Once we turn letters into numbers, we train the computer with a simple guessing game:
 
-1. We give the model a short sequence of numbers (for example, the last 12 letters you typed).
+1. We give the model a short sequence of numbers (for example, the last 48 letters you typed).
 2. We ask it: *"What number (letter) should come next?"*
 3. The model makes a guess.
 4. Because we have training text, we already know the true answer!
@@ -124,7 +125,7 @@ Once we turn letters into numbers, we train the computer with a simple guessing 
 
 Think of the model as a clear box with a few mathematical tables (these tables are called **weights** or parameters):
 
-1. **Embedding**: Each character gets its own private row of numbers (a vector). Instead of just being "character #2", the letter `'a'` becomes a 32-number fingerprint that captures how it is used in text.
+1. **Embedding**: Each character gets its own private row of numbers (a vector). Instead of just being "character #2", the letter `'a'` becomes a 64-number feature vector that captures how it is used in text.
 2. **Self-Attention**: The heart of the transformer! When guessing the next letter, the model doesn't just look at the very last key; it looks back across the entire history of recent letters and decides **which ones matter most**. For instance, if you typed `q-u-i-c-k`, the model pays attention to `q` and `u` to know you are in the middle of a word.
 3. **Feed-Forward Layers**: Extra calculations that mix and combine the clues so the model can learn nuanced patterns.
 4. **Final Output Projection**: Converts the internal numbers into percentage scores for every key on your keyboard. The key with the highest score is the #1 prediction!
@@ -213,7 +214,7 @@ Keystroke-LLM transforms your physical mechanical keyboard into an active extens
                                            v
 +---------------------------------------------------------------------------------------+
 |                             PHYSICAL MATRIX SLOT MAPPING                              |
-|       - Maps character tokens to Kreo Hive 75 physical LED indices (21-stride)        |
+|       - Maps character tokens to Kreo Hive 75 physical LED indices (16x8 matrix)        |
 +---------------------------------------------------------------------------------------+
                                            |
                                            v
@@ -279,9 +280,9 @@ sequenceDiagram
 
 Let:
 - $V$: Vocabulary size ($V = 98$, encompassing uppercase, lowercase, numbers, and symbols).
-- $d_{model}$: Hidden dimension ($d_{model} = 32$).
-- $T$: Context sequence length ($1 \le T \le seq\_len$, default $seq\_len = 12$).
-- $d_{ff}$: Feed-forward hidden dimension ($d_{ff} = 2 \times d_{model} = 64$).
+- $d_{model}$: Hidden dimension ($d_{model} = 64$).
+- $T$: Context sequence length ($1 \le T \le seq\_len$, default $seq\_len = 48$).
+- $d_{ff}$: Feed-forward hidden dimension ($d_{ff} = 2 \times d_{model} = 128$).
 
 #### Tensor Dimensions Across the Forward Pass
 
@@ -315,17 +316,17 @@ Input Tokens:   ['t', 'h', 'e', ' ']
                   |    |    |    |
                   v    v    v    v
             +-----------------------+
-            |  Embedding Layer      |  -> Matrix X [4 x 32]
+            |  Embedding Layer      |  -> Matrix X [4 x 64]
             +-----------------------+
                   |         |
          +--------+         +--------+
          v                           v
    Query = X * W_q              Key = X * W_k
-     [4 x 32]                     [4 x 32]
+     [4 x 64]                     [4 x 64]
          \                           /
           \                         /
            v                       v
-          Attention Scores S = (Q * K^T) / sqrt(32)   [4 x 4]
+          Attention Scores S = (Q * K^T) / sqrt(64)   [4 x 4]
                              |
                              v
                Apply Causal Mask (Upper Triangle = -1e9)
@@ -339,10 +340,10 @@ Input Tokens:   ['t', 'h', 'e', ' ']
                Row-wise Softmax -> Weights A [4 x 4]
                              |
                              v
-             Multiply by Values V = X * W_v [4 x 32]
+             Multiply by Values V = X * W_v [4 x 64]
                              |
                              v
-             Aggregated Context C = A * V   [4 x 32]
+             Aggregated Context C = A * V   [4 x 64]
 ```
 
 ---
@@ -374,7 +375,7 @@ def softmax(x: np.ndarray, axis: int = -1) -> np.ndarray:
 #### Model Initialization (`model.py` — `__init__`)
 ```python
 class TinyTransformer:
-    def __init__(self, vocab_size: int = 96, hidden_size: int = 32, seq_len: int = 12, ...):
+    def __init__(self, vocab_size: int = 98, hidden_size: int = 64, seq_len: int = 48, ...):
 ```
 - Pre-allocates all parameter matrices with Xavier uniform initialization:
   - `W_emb`: Token embeddings $[V, d_{model}]$ — one learned vector per character.
@@ -509,7 +510,7 @@ Every sample allows the causal attention mask to train prefix lengths $1, 2, \do
    - Forward-only evaluation on the held-out validation dataset without updating gradients.
    - Computes multi-position cross-entropy loss to track true generalization and detect overfitting.
 3. **`train()`** (Lines 53–140):
-   - **CLI Flags**: `--data`, `--epochs`, `--lr` (default `0.003`), `--seq-len` (default `12`), `--hidden-size` (default `32`), `--stride` (default `3`), `--mode` (`backprop` or `heuristic`), `--checkpoint-dir`, `--resume`, `--seed`, `--val-split` (default `0.10` / 10%).
+   - **CLI Flags**: `--data`, `--epochs`, `--lr` (default `0.003`), `--seq-len` (default `48`), `--hidden-size` (default `64`), `--stride` (default `3`), `--mode` (`backprop` or `heuristic`), `--checkpoint-dir`, `--resume`, `--seed`, `--val-split` (default `0.10` / 10%).
    - **Reproducibility**: If `--seed` is passed, runs `np.random.seed(args.seed)` to ensure deterministic data shuffling and weight initialization.
    - **Validation Split**: Automatically partitions the dataset into training samples and a held-out temporal validation split (e.g. 90% train / 10% validation).
    - **CSV Logging**: Automatically logs `epoch`, `train_loss`, `val_loss`, and `time_s` to `checkpoints/loss_log.csv` after every epoch.
@@ -557,7 +558,7 @@ CHAR_TO_KEY = {
 
 ### 7.1 The 75% Compact Layout Anatomy
 
-The **Kreo Hive 75** is an 83-key physical layout:
+The **Kreo Hive 75** is an 82-key physical layout:
 - **Row 0 (Function Row)**: 15 switches (`Esc`, `F1`–`F12`, `PrtSc`, `Del`). No physical spacing between `Esc` and `F1`.
 - **Row 1 (Number Row)**: 15 switches (`` ` ``, `1`–`0`, `-`, `=`, `Backspace`, `Home`).
 - **Row 2 (Upper Row)**: 15 switches (`Tab`, `Q`–`P`, `[`, `]`, `\`, `PgUp`).
@@ -583,43 +584,55 @@ The **Kreo Hive 75** is an 83-key physical layout:
 
 ---
 
-### 7.2 The Mystery of Key Shifting: 104-Key vs 75% Matrix
+### 7.2 PCB Matrix Architecture: The 16x8 Column-Interleaved Matrix
 
-Earlier versions of this software experienced a key-shift bug: when the neural network predicted `'h'`, key `'y'` lit up; when it predicted `'t'`, `'f4'` lit up; when it predicted `'w'`, `'1'` lit up.
+During hardware reverse-engineering of the Kreo Hive 75 EVision V2 controller, generic OpenRGB and 104-key drivers produced vertical column shifts because full-size keyboards space function keys differently and route PCB traces in simple row orders.
 
-#### The Root Cause
-Generic OpenRGB controllers assume a full-size 104-key matrix wired in column-major order with standard spacing:
-- On a 104-key keyboard, there is an empty gap above key `1`, so `F1` is placed in Column 2 above key `2`, and `F4` is in Column 5 above key `T`.
-- On a 75% compact keyboard, there are **no gaps**. `F1` is directly above `1`, `F4` is directly above `4`, etc.
-- Furthermore, the EVision V2 controller in the Kreo Hive 75 addresses LEDs using a **21-stride row-based matrix layout**:
-  - Row 0 starts at offset $0$
-  - Row 1 starts at offset $21$
-  - Row 2 starts at offset $42$
-  - Row 3 starts at offset $63$
-  - Row 4 starts at offset $84$
-  - Row 5 starts at offset $105$
+Direct USB hardware probing revealed that the Kreo Hive 75 addresses LEDs via an internal **16-column by 8-row memory matrix** ($16 	imes 8 = 128$ addressable slots):
 
-When a 104-key column formula was evaluated on the 21-stride physical firmware:
-- Key `'W'` was given slot $14$. On a 21-stride matrix, slot $14$ is in Row 0 (physical key `1`)!
-- Key `'T'` was given slot $32$. On a 21-stride matrix, slot $32$ is in Row 1 (physical key `F4`)!
-- Key `'H'` was given slot $39$. On a 21-stride matrix, slot $39$ is in Row 1 (physical key `Y`)!
+$$	ext{slot} = (	ext{col} 	imes 8) + 	ext{row}$$
 
-Every predicted key lit up one row higher in the exact same vertical column.
+```
+        Col 0   Col 1   Col 2   Col 3   Col 4   Col 5   Col 6   Col 7 ... Col 15
+Row 0:   Esc     F1      F2      F3      F4      F5      F6      F7        Del
+Row 1:   `~      1       2       3       4       5       6       7         Home
+Row 2:   Tab     Q       W       E       R       T       Y       U         PgUp
+Row 3:   Caps    A       S       D       F       G       H       J         PgDn
+Row 4:   LShift  Z       X       C       --      V       B       N         End
+Row 5:   LCtrl   Win     Alt     --      --      --    Space     --        Right
+```
+
+Every standard switch follows this exact formula. The bottom alpha row (ZXCV) features physical trace routing jumps calibrated in `profiles/hive75.json`:
+- `V = 44` (Col 5, Row 4)
+- `B = 52` (Col 6, Row 4)
+- `N = 60` (Col 7, Row 4)
+- `M = 68` (Col 8, Row 4)
+- `Space = 53` (Col 6, Row 5)
 
 ---
 
-### 7.3 The 21-Stride Row-Based Matrix Table
+### 7.3 Verified Physical Hardware Slot Mapping Table
 
-Below is the verified hardware matrix mapping implemented in [`profiles/hive75.json`](profiles/hive75.json):
+Below is the verified hardware slot mapping implemented in [`profiles/hive75.json`](profiles/hive75.json):
 
-| Row | Hardware Slot Range | Key Names and Exact Physical Hardware Slots |
-| :--- | :--- | :--- |
-| **Row 0** | $0 \dots 16$ | `esc`: 0, `f1`: 2, `f2`: 3, `f3`: 4, `f4`: 5, `f5`: 6, `f6`: 7, `f7`: 8, `f8`: 9, `f9`: 10, `f10`: 11, `f11`: 12, `f12`: 13, `printscreen`: 14, `del`: 16 |
-| **Row 1** | $21 \dots 36$ | `grave`: 21, `1`: 22, `2`: 23, `3`: 24, `4`: 25, `5`: 26, `6`: 27, `7`: 28, `8`: 29, `9`: 30, `0`: 31, `minus`: 32, `equal`: 33, `backspace`: 34, `home`: 36 |
-| **Row 2** | $42 \dots 56$ | `tab`: 42, `q`: 43, `w`: 44, `e`: 45, `r`: 46, `t`: 47, `y`: 48, `u`: 49, `i`: 50, `o`: 51, `p`: 52, `lbracket`: 53, `rbracket`: 54, `backslash`: 55, `pgup`: 56 |
-| **Row 3** | $63 \dots 80$ | `capslock`: 63, `a`: 64, `s`: 65, `d`: 66, `f`: 67, `g`: 68, `h`: 69, `j`: 70, `k`: 71, `l`: 72, `semicolon`: 73, `quote`: 74, `enter`: 76, `pgdn`: 80 |
-| **Row 4** | $84 \dots 101$ | `lshift`: 84, `z`: 86, `x`: 87, `c`: 88, `v`: 89, `b`: 90, `n`: 91, `m`: 92, `comma`: 93, `period`: 94, `slash`: 95, `rshift`: 97, `up`: 99, `end`: 101 |
-| **Row 5** | $105 \dots 121$ | `lctrl`: 105, `win`: 106, `lalt`: 107, `space`: 111, `ralt`: 115, `fn`: 116, `rctrl`: 118, `left`: 119, `down`: 120, `right`: 121 |
+| Matrix Column | Row 0 (Function) | Row 1 (Numbers) | Row 2 (QWERTY) | Row 3 (ASDF) | Row 4 (ZXCV) | Row 5 (Modifiers) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Col 0** | `esc`: 0 | `` ` ``: 1 | `tab`: 2 | `capslock`: 3 | `lshift`: 4 | `lctrl`: 5 |
+| **Col 1** | `f1`: 8 | `1`: 9 | `q`: 10 | `a`: 11 | `z`: 12 | `win`: 13 |
+| **Col 2** | `f2`: 16 | `2`: 17 | `w`: 18 | `s`: 19 | `x`: 20 | `lalt`: 21 |
+| **Col 3** | `f3`: 24 | `3`: 25 | `e`: 26 | `d`: 27 | `c`: 28 | -- |
+| **Col 4** | `f4`: 32 | `4`: 33 | `r`: 34 | `f`: 35 | -- | -- |
+| **Col 5** | `f5`: 40 | `5`: 41 | `t`: 42 | `g`: 43 | `v`: 44 | -- |
+| **Col 6** | `f6`: 48 | `6`: 49 | `y`: 50 | `h`: 51 | `b`: 52 | `space`: 53 |
+| **Col 7** | `f7`: 56 | `7`: 57 | `u`: 58 | `j`: 59 | `n`: 60 | -- |
+| **Col 8** | `f8`: 64 | `8`: 65 | `i`: 66 | `k`: 67 | `m`: 68 | -- |
+| **Col 9** | `f9`: 72 | `9`: 73 | `o`: 74 | `l`: 75 | `comma`: 76 | -- |
+| **Col 10** | `f10`: 80 | `0`: 81 | `p`: 82 | `semicolon`: 83 | `period`: 84 | `ralt`: 85 |
+| **Col 11** | `f11`: 88 | `minus`: 89 | `lbracket`: 90 | `quote`: 91 | `slash`: 92 | `fn`: 93 |
+| **Col 12** | `f12`: 96 | `equal`: 97 | `rbracket`: 98 | -- | `rshift`: 100 | `rctrl`: 101 |
+| **Col 13** | `printscreen`: 104 | `backspace`: 105 | `backslash`: 106 | `enter`: 107 | `up`: 108 | `left`: 109 |
+| **Col 14** | -- | -- | -- | -- | -- | `down`: 117 |
+| **Col 15** | `del`: 120 | `home`: 121 | `pgup`: 122 | `pgdn`: 123 | `end`: 124 | `right`: 125 |
 
 ---
 
@@ -645,11 +658,10 @@ The Kreo Hive 75 operates using an EVision V2 microcontroller (`VID: 0x320F, PID
 +---+---------+---------+------+-------+---------+----------+------+------------+
 ```
 
-### 8.2 Packet Framing & 16-Bit Checksum Calculus
+### 8.2 Packet Framing, Checksum & ACK Draining
 
 Every 64-byte packet requires a 16-bit sum checksum computed over bytes $3 \dots 63$:
 $$\text{Checksum} = \sum_{k=3}^{63} \text{packet}[k] \pmod{65536}$$
-In code:
 ```python
 def _compute_evision_checksum(buf: bytearray) -> bytearray:
     chksum = sum(buf[3:64]) & 0xFFFF
@@ -657,7 +669,16 @@ def _compute_evision_checksum(buf: bytearray) -> bytearray:
     buf[2] = (chksum >> 8) & 0xFF  # High byte
     return buf
 ```
-If the checksum does not match, the keyboard's USB microcontroller rejects the packet and drops the frame.
+
+#### USB Pipe Buffer & ACK Draining
+The EVision V2 keyboard microcontroller responds to every dynamic color report with an acknowledgment report. If the host software writes frames without reading ACKs, the operating system USB endpoint buffer overflows and writes stall.
+`hardware_controller.py` drains the ACK report after each chunk write:
+```python
+self.hid_device.write(list(pkt))
+if read_ack:
+    self.hid_device.read(64, 20)  # Drain ACK response within 20ms timeout
+```
+This guarantees non-blocking frame transmission with sub-2ms write times. If the checksum does not match, the keyboard's USB microcontroller rejects the packet and drops the frame.
 
 ### 8.3 The 10 Hz Keepalive Watchdog Engine
 
@@ -689,7 +710,7 @@ The EVision keyboard firmware features an internal watchdog timer. If dynamic pa
      ```python
      self.rgb_buffer = bytearray([bg_r, bg_g, bg_b] * self.profile.num_slots)
      ```
-     This ensures that all 83 switches on the board glow in uniform white light with no missing keys.
+     This ensures that all 82 switches on the board glow in uniform white light with no missing keys.
    - Overwrites the target Top-K predicted keys with their respective red tones.
 7. **`close()`** (Lines 464–484):
    - Signals `self._stop_event.set()` to instantly wake and join the keepalive thread without sleep latency.
@@ -738,7 +759,25 @@ Typing in Browser/Editor               Typing in Terminal
 
 ---
 
-### 9.2 Context State Machine & Idle Dimming
+### 9.2 Auto-Pause WASD / Gaming Detection
+
+When gaming (e.g. playing an FPS or movement-heavy game), rapid WASD keystrokes or held key presses would otherwise cause erratic red highlights across the keyboard.
+
+`PredictiveKeyLightsApp` features an automatic gaming state detector:
+1. **Trigger Condition**:
+   - $\ge 4$ consecutive keystrokes within `{'w', 'a', 's', 'd'}`.
+   - $\ge 5$ consecutive repetitions of any non-space key.
+2. **Behavior on Trigger**:
+   - Switches `is_gaming = True`.
+   - Clears the context buffer.
+   - Reverts the entire keyboard to a calm, neutral white backlight (`#FFFFFF`).
+3. **Seamless Resume**:
+   - Resumes predictive lighting as soon as the user presses Enter, Space, or types a non-movement character (e.g. typing in team chat).
+   - Alternatively disengages if typing stops for more than 1.2 seconds.
+
+---
+
+### 9.3 Context State Machine & Idle Dimming
 
 To maintain an intuitive lighting experience:
 - **Empty Context State**: At startup or when backspaced to 0 characters, no red predictions are illuminated. The keyboard displays a uniform white backlight, prompting:
@@ -776,7 +815,7 @@ To maintain an intuitive lighting experience:
 | :--- | :--- | :--- |
 | **Startup Empty Context** | Model predicted on space (`" "`), lighting `F4`, `Y`, `1` in red before typing began. | If `len(rolling_buffer) == 0`, inference is bypassed and keyboard remains 100% white. |
 | **Missing Background Keys** | Background fill only looped over `slot_map.values()`. Keys like `f`, `j`, `p`, `=`, `[`, `]`, `f11`, `ctrl`, `shift`, `del` stayed dark. | Populates the entire 128-slot buffer unconditionally: `bytearray([bg_r, bg_g, bg_b] * num_slots)`. |
-| **Physical Matrix Offset** | 104-key column formula shifted letters onto function and number rows (`W` $\to$ `1`, `T` $\to$ `F4`, `H` $\to$ `Y`). | Mapped all 83 switches to verified 21-stride Kreo Hive 75 row-based matrix coordinates. |
+| **Physical Matrix Offset** | 104-key column formula shifted letters onto function and number rows (`W` $\to$ `1`, `T` $\to$ `F4`, `H` $\to$ `Y`). | Mapped all 82 switches to verified 16x8 matrix Kreo Hive 75 row-based matrix coordinates. |
 | **Keystroke Hook Freezing** | `pynput.join()` stalled the thread, preventing non-blocking fallback from ever executing. | Spawns `pynput` with non-blocking `start()` while running console poller conditionally. |
 | **Ctrl+C Trapping** | `msvcrt.getch()` intercepted `\x03`, preventing process termination via Ctrl+C. | Intercepts byte `b'\x03'` in console poller and invokes `_thread.interrupt_main()`. |
 | **Carriage Return / DEL Corruption** | `\r` and `\x7f` treated as `<unk>` or failing to delete context on some terminals. | Normalizes `\r` to `\n` and `\x7f` to `\b` in `_enqueue()` before control filtering. |

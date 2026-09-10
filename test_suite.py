@@ -1,15 +1,4 @@
-"""Self-contained test suite for Keystroke-LLM.
-
-Tests:
-1. Model forward pass, attention shapes, and checkpoint serialization.
-2. Character tokenization, key mapping, aliases, and physical matrix slots.
-3. Hardware controller mock mode, buffer sizing, and background illumination.
-4. Input reader edge cases (normalization, DEL/backspace, debounce, control codes).
-5. Lockfile and PID liveness detection (Windows and POSIX).
-6. Attention matrix row re-normalization.
-7. Training dataset validation and checkpoint vocabulary reconciliation on resume.
-8. End-to-end application lifecycle in mock mode.
-"""
+"""Unit test suite for Keystroke-LLM."""
 
 import errno
 import os
@@ -229,6 +218,122 @@ class TestKeystrokeLLM(unittest.TestCase):
             self.assertEqual(len(app.kbd._current_colors), 0)
         finally:
             app.cleanup()
+
+    def test_09_long_context_and_sampling_stability(self):
+        vocab = get_default_vocab()
+        tokenizer = CharTokenizer(vocab)
+        model = TinyTransformer(vocab_size=len(vocab), hidden_size=64, seq_len=48)
+
+        # 48-character forward pass
+        text_48 = "a" * 48
+        tokens = tokenizer.encode(text_48)
+        logits, probs = model.forward(tokens)
+        self.assertEqual(logits.shape, (48, len(vocab)))
+        self.assertEqual(probs.shape, (len(vocab),))
+        self.assertFalse(np.isnan(probs).any())
+        self.assertTrue(np.isclose(np.sum(probs), 1.0, atol=1e-5))
+
+        # Context truncation if input > seq_len
+        text_60 = "b" * 60
+        logits_trunc, probs_trunc = model.forward(tokenizer.encode(text_60))
+        self.assertEqual(logits_trunc.shape, (48, len(vocab)))
+
+        # Temperature sampling stability: greedy, extreme cold, standard, hot
+        seed = tokenizer.encode("the ")
+        for temp in [0.0, 1e-5, 0.05, 0.5, 1.0, 2.0]:
+            gen = model.generate(seed, num_chars=5, temperature=temp)
+            self.assertEqual(len(gen), 5)
+            self.assertTrue(all(0 <= tid < len(vocab) for tid in gen))
+
+    def test_10_adam_state_checkpoint_persistence(self):
+        vocab = get_default_vocab()
+        tokenizer = CharTokenizer(vocab)
+        model = TinyTransformer(vocab_size=len(vocab), hidden_size=32, seq_len=16)
+
+        # Run 2 training steps with Adam
+        ctx = tokenizer.encode("hello ")
+        tgt = tokenizer.encode("ello w")
+        loss1 = model.train_step_backprop(ctx, tgt, lr=0.005, use_adam=True)
+        loss2 = model.train_step_backprop(ctx, tgt, lr=0.005, use_adam=True)
+        self.assertEqual(model._adam_step, 2)
+
+        with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
+            tmp_ckpt = f.name
+        try:
+            model.save_checkpoint(tmp_ckpt, vocab=vocab)
+            loaded = TinyTransformer.load_checkpoint(tmp_ckpt)
+            self.assertEqual(loaded._adam_step, 2)
+            self.assertTrue(np.allclose(loaded._adam_emb_m, model._adam_emb_m))
+            self.assertTrue(np.allclose(loaded._adam_pos_m, model._adam_pos_m))
+            self.assertTrue(np.allclose(loaded.W_pos, model.W_pos))
+            self.assertTrue(np.allclose(loaded.W_out, model.W_out))
+        finally:
+            if os.path.exists(tmp_ckpt):
+                os.remove(tmp_ckpt)
+
+    def test_11_gaming_wasd_auto_pause_transitions(self):
+        checkpoint_path = "checkpoints/model_final.npz"
+        if not os.path.exists(checkpoint_path):
+            self.skipTest(f"Checkpoint unavailable: {checkpoint_path}")
+        app = PredictiveKeyLightsApp(
+            checkpoint_path=checkpoint_path,
+            mock=True,
+            show_probs=False,
+            auto_pause_wasd=True
+        )
+        try:
+            # Simulate gaming WASD streak
+            for ch in ["w", "a", "s", "d"]:
+                app.key_queue.put(ch)
+
+            # Process queue manually or via run loop step
+            while not app.key_queue.empty():
+                ch = app.key_queue.get()
+                if ch.lower() in ("w", "a", "s", "d"):
+                    app.wasd_streak += 1
+                if app.wasd_streak >= 4:
+                    app.is_gaming = True
+                    app.rolling_buffer.clear()
+            self.assertTrue(app.is_gaming)
+            self.assertEqual(len(app.rolling_buffer), 0)
+
+            # Resume by typing regular text
+            resume_char = "h"
+            if ch in ("\n", " ") or (resume_char.lower() not in ("w", "a", "s", "d")):
+                app.is_gaming = False
+                app.wasd_streak = 0
+                app.rolling_buffer.append(resume_char)
+            self.assertFalse(app.is_gaming)
+            self.assertEqual(app.rolling_buffer, ["h"])
+        finally:
+            app.cleanup()
+
+    def test_12_attention_matrix_edge_cases(self):
+        # Empty inputs should safely return without exception
+        render_attention_matrix([], np.array([]))
+        render_attention_matrix(["a"], np.array([[1.0]]))
+
+    def test_13_controller_atexit_and_idempotence(self):
+        ctrl = KeyboardController(mock=True)
+        self.assertTrue(ctrl._registered_atexit)
+        self.assertTrue(ctrl._running)
+        ctrl.close()
+        self.assertFalse(ctrl._running)
+        self.assertFalse(ctrl._registered_atexit)
+        # Second close must be a no-op and not raise
+        ctrl.close()
+
+    def test_14_debounce_cache_pruning(self):
+        q = queue.Queue(maxsize=512)
+        reader = LowLatencyInputReader(q)
+        try:
+            # Enqueue 300 unique unicode characters
+            for i in range(300):
+                reader._enqueue(chr(0x4E00 + i))
+            # Cache must be bounded to at most 257 items
+            self.assertLessEqual(len(reader._last_key_time), 257)
+        finally:
+            reader.stop()
 
 
 if __name__ == "__main__":

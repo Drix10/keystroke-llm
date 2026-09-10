@@ -7,11 +7,13 @@ import time
 import numpy as np
 
 from key_mapper import CharTokenizer, get_default_vocab
-from model import TinyTransformer
+from model import TinyTransformer, softmax
 
 
 def build_sliding_window_dataset(text: str, tokenizer: CharTokenizer, seq_len: int, stride: int = 3) -> list[tuple[list[int], list[int]]]:
     """Generates (input_seq, target_seq) pairs of length seq_len from text."""
+    if stride < 1:
+        raise ValueError(f"stride must be >= 1, got {stride}")
     token_ids = tokenizer.encode(text)
     if len(token_ids) <= seq_len:
         return []
@@ -45,7 +47,6 @@ def compute_val_loss(model: TinyTransformer, val_dataset: list[tuple[list[int], 
     total = 0.0
     for ctx, tgt in val_dataset:
         _, probs = model.forward(ctx)
-        from model import softmax
         probs_all = softmax(model.last_cache["logits"], axis=-1)
         y_seq = np.array(tgt, dtype=int)
         T = len(ctx)
@@ -57,10 +58,10 @@ def compute_val_loss(model: TinyTransformer, val_dataset: list[tuple[list[int], 
 def train():
     parser = argparse.ArgumentParser(description="Train TinyTransformer on character data")
     parser.add_argument("--data", type=str, default="data/sample_training_text.txt", help="Path to training text")
-    parser.add_argument("--epochs", type=int, default=10, help="Epoch count")
+    parser.add_argument("--epochs", type=int, default=15, help="Epoch count (default: 15)")
     parser.add_argument("--lr", type=float, default=0.003, help="Learning rate (Adam default: 0.003)")
-    parser.add_argument("--seq-len", type=int, default=12, help="Context length in characters")
-    parser.add_argument("--hidden-size", type=int, default=32, help="Transformer hidden size")
+    parser.add_argument("--seq-len", type=int, default=48, help="Context length in characters (default: 48)")
+    parser.add_argument("--hidden-size", type=int, default=64, help="Transformer hidden size (default: 64)")
     parser.add_argument("--stride", type=int, default=3, help="Sliding window stride for dataset construction")
     parser.add_argument("--mode", type=str, choices=["heuristic", "backprop"], default="backprop", help="Training mode")
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints", help="Save directory")
@@ -104,7 +105,7 @@ def train():
                 f"Checkpoint vocab size ({model.vocab_size}) does not match tokenizer vocab size ({tokenizer.vocab_size})."
             )
     else:
-        # Build character vocabulary ensuring full keyboard symbol coverage
+        # Build vocabulary from training text
         vocab = get_default_vocab()
         for ch in text:
             if ch not in vocab:
@@ -123,7 +124,6 @@ def train():
             f"Dataset is empty! Input text ({len(text)} chars) must contain more than seq_len ({args.seq_len}) characters."
         )
 
-    # Validation split — hold out the last val_split fraction (keeps temporal order intact)
     val_size = int(len(dataset) * args.val_split) if args.val_split > 0 else 0
     train_dataset = dataset[: len(dataset) - val_size]
     val_dataset = dataset[len(dataset) - val_size :]
@@ -132,11 +132,10 @@ def train():
     if not train_dataset:
         raise ValueError("Training split is empty after validation holdout. Use a longer text or reduce --val-split.")
 
-    test_prompts = ["The qui", "def hel", "self at", "Kreo Hi"]
+    test_prompts = ["How are ", "Thank ", "Good ", "The qui", "def hel", "I am ", "What is ", "Please "]
     print("Initial baseline:")
     evaluate_predictions(model, tokenizer, test_prompts)
 
-    # CSV loss log
     csv_path = os.path.join(args.checkpoint_dir, "loss_log.csv")
     csv_file = open(csv_path, "w", newline="", encoding="utf-8")
     csv_writer = csv.writer(csv_file)

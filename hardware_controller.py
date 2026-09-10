@@ -12,6 +12,7 @@ import glob
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
 from typing import Dict, Optional, Tuple
@@ -167,7 +168,8 @@ class KeyboardController:
         self._last_reconnect_attempt = 0.0
         self._keepalive_thread: Optional[threading.Thread] = None
 
-        self.lockfile_path = "/tmp/keystroke_llm.lock" if os.name == "posix" else "keystroke_llm.lock"
+        self.lockfile_path = os.path.join(tempfile.gettempdir(), "keystroke_llm.lock")
+        self._lock_held = False
         self._acquire_lock()
 
         if not self.mock:
@@ -179,31 +181,39 @@ class KeyboardController:
         self._keepalive_thread = threading.Thread(target=self._keepalive_loop, daemon=True)
         self._keepalive_thread.start()
 
+        self._registered_atexit = True
         atexit.register(self.close)
 
     def _acquire_lock(self):
         try:
             if os.path.exists(self.lockfile_path):
                 try:
-                    with open(self.lockfile_path, "r") as f:
+                    with open(self.lockfile_path, "r", encoding="utf-8") as f:
                         old_pid = int(f.read().strip())
                     if _is_pid_running(old_pid) and old_pid != os.getpid():
                         print(f"[Warning] Another instance (PID {old_pid}) is active.", file=sys.stderr)
+                        self._lock_held = False
                         return
                     else:
-                        os.remove(self.lockfile_path)
+                        try:
+                            os.remove(self.lockfile_path)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
-            with open(self.lockfile_path, "w") as f:
+            with open(self.lockfile_path, "w", encoding="utf-8") as f:
                 f.write(str(os.getpid()))
+            self._lock_held = True
         except Exception:
-            pass
+            self._lock_held = False
 
     def _release_lock(self):
+        if not getattr(self, "_lock_held", False):
+            return
         try:
             if os.path.exists(self.lockfile_path):
                 try:
-                    with open(self.lockfile_path, "r") as f:
+                    with open(self.lockfile_path, "r", encoding="utf-8") as f:
                         file_pid = int(f.read().strip())
                     if file_pid == os.getpid():
                         os.remove(self.lockfile_path)
@@ -211,6 +221,8 @@ class KeyboardController:
                     pass
         except Exception:
             pass
+        finally:
+            self._lock_held = False
 
     def _connect_hid(self) -> bool:
         """Attempts connection using cross-platform python-hid."""
@@ -319,7 +331,7 @@ class KeyboardController:
 
         print(f"[HardwareController] Physical keyboard not detected ({self.profile.usb_ids}). Operating without active hardware connection (retrying in background).")
 
-    def _send_evision_frame(self, read_ack: bool = False):
+    def _send_evision_frame(self, read_ack: bool = True):
         """Streams dynamic RGB colors using EVision CMD 0x12."""
         if self.hid_device is None:
             return
@@ -352,7 +364,7 @@ class KeyboardController:
                 pass
             self.hid_device = None
 
-    def _flush_frame(self, read_ack: bool = False):
+    def _flush_frame(self, read_ack: bool = True):
         if self.is_evision:
             self._send_evision_frame(read_ack=read_ack)
             return
@@ -402,12 +414,14 @@ class KeyboardController:
                 continue
             if self._stop_event.wait(interval):
                 break
+            if not self._running or self._stop_event.is_set():
+                break
 
             if not self.mock:
                 if self.hid_device is not None or self.fd is not None:
                     with self._lock:
                         try:
-                            self._flush_frame(read_ack=False)
+                            self._flush_frame(read_ack=True)
                         except Exception:
                             pass
                 else:
@@ -476,18 +490,29 @@ class KeyboardController:
             return
         self._running = False
         self._stop_event.set()
+
+        if getattr(self, "_registered_atexit", False):
+            try:
+                atexit.unregister(self.close)
+            except Exception:
+                pass
+            self._registered_atexit = False
+
         if self._keepalive_thread and self._keepalive_thread.is_alive():
-            self._keepalive_thread.join(timeout=0.5)
-        try:
-            self.restore_default_mode()
-            if self.hid_device is not None:
-                self.hid_device.close()
-                self.hid_device = None
-            if self.fd is not None:
-                os.close(self.fd)
-                self.fd = None
-        except Exception:
-            pass
+            self._keepalive_thread.join(timeout=1.0)
+
+        with self._lock:
+            try:
+                self.restore_default_mode()
+                if self.hid_device is not None:
+                    self.hid_device.close()
+                    self.hid_device = None
+                if self.fd is not None:
+                    os.close(self.fd)
+                    self.fd = None
+            except Exception:
+                pass
+
         self._release_lock()
         print("\n[HardwareController] Closed (restored default lighting).")
 
@@ -528,8 +553,7 @@ if __name__ == "__main__":
             pairs = {args.key[i]: args.key[i + 1] for i in range(0, len(args.key) - 1, 2)}
             ctrl.set_key_colors(pairs, brightness=args.brightness, default_background="ffffff")
         else:
-            # Default demo: All keys soft white, predicted letters (W, A, S, D, SPACE) highlighted in solid RED
-            print("Illuminating WASD + Space in bright RED (#FF0000) over clean WHITE (#FFFFFF) backlight...")
+            print("Lighting WASD + Space in red (#FF0000) over white (#FFFFFF)...")
             ctrl.set_key_colors({
                 "w": "ff0000", "a": "ff0000", "s": "ff0000", "d": "ff0000", "space": "ff0000"
             }, brightness=args.brightness, clear_others=True, default_background="ffffff")

@@ -11,7 +11,13 @@ from typing import List
 import numpy as np
 
 from hardware_controller import KeyboardController
-from key_mapper import CharTokenizer, char_to_key_name, get_default_vocab
+from key_mapper import (
+    CharTokenizer,
+    char_to_key_name,
+    get_default_vocab,
+    VALID_PREDICTIVE_CHARS,
+    format_prediction_label,
+)
 from model import TinyTransformer
 
 # Color palette for predicted keys: Rank 1 is vivid solid red, ranks 2-5 are graded soft red
@@ -26,6 +32,8 @@ RANK_COLORS = [
 
 def render_attention_matrix(tokens: List[str], attn_weights: np.ndarray):
     """Prints an ASCII causal attention heatmap for the active context."""
+    if not tokens or attn_weights is None or attn_weights.size == 0:
+        return
     T = len(tokens)
     print("\n--- Attention Weights Matrix ---")
     header = "     " + " ".join([f"{repr(t)[1:-1]:>3}" for t in tokens])
@@ -94,12 +102,9 @@ class LowLatencyInputReader:
         except Exception:
             self.listener = None
 
-        # 2. Worker thread for stdin / msvcrt console input (fallback if pynput is unavailable)
-        if self.listener is None:
-            self.thread = threading.Thread(target=self._worker, daemon=True)
-            self.thread.start()
-        else:
-            self.thread = None
+        # 2. Worker thread for stdin / msvcrt console input (runs alongside pynput for zero-miss capture)
+        self.thread = threading.Thread(target=self._worker, daemon=True)
+        self.thread.start()
 
     def _enqueue(self, ch: str):
         # Normalize carriage return to newline and DEL to backspace
@@ -122,6 +127,9 @@ class LowLatencyInputReader:
 
         # Debounce: avoid duplicate events if identical key fires within 15ms
         now = time.time()
+        if len(self._last_key_time) > 256:
+            sorted_items = sorted(self._last_key_time.items(), key=lambda item: item[1])
+            self._last_key_time = dict(sorted_items[-128:])
         last_t = self._last_key_time.get(ch, 0.0)
         if (now - last_t) > 0.015:
             self._last_key_time[ch] = now
@@ -196,14 +204,22 @@ class PredictiveKeyLightsApp:
 
     def __init__(self, checkpoint_path: str, profile_name: str = "hive75",
                  top_k: int = 5, brightness: float = 1.0,
-                 context_len: int = 12, show_probs: bool = False,
+                 context_len: int = 48, show_probs: bool = False,
                  show_attn: bool = False, mock: bool = False,
-                 idle_timeout: float = 6.0):
+                 idle_timeout: float = 6.0, demo: bool = False,
+                 seed: str = "", auto_pause_wasd: bool = True):
         self.top_k = min(max(1, top_k), 5)
         self.brightness = max(0.0, min(1.0, brightness))
         self.show_probs = show_probs
         self.show_attn = show_attn
         self.idle_timeout = idle_timeout
+        self.demo = demo
+        self.seed = seed
+        self.auto_pause_wasd = auto_pause_wasd
+        self.is_gaming = False
+        self.wasd_streak = 0
+        self.last_char = None
+        self.repeat_count = 0
 
         if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path}. Run train.py first.")
@@ -220,27 +236,51 @@ class PredictiveKeyLightsApp:
         self.kbd = KeyboardController(profile_name=profile_name, mock=mock)
 
         self.key_queue = queue.Queue(maxsize=128)
-        self.rolling_buffer = []
+        self.rolling_buffer = list(seed) if seed else []
         self.last_type_time = time.time()
         self.is_idle = False
 
         self.input_reader = LowLatencyInputReader(self.key_queue)
         self.running = True
+        self._demo_stop_event = threading.Event()
+
+        if self.demo:
+            self.demo_thread = threading.Thread(target=self._demo_runner, daemon=True)
+            self.demo_thread.start()
+
+    def _demo_runner(self):
+        demo_text = "The quick brown fox jumps over the lazy dog. How are you today? Thank you very much! "
+        if self._demo_stop_event.wait(1.5):
+            return
+        while self.running and not self._demo_stop_event.is_set():
+            for ch in demo_text:
+                if not self.running or self._demo_stop_event.is_set():
+                    return
+                try:
+                    self.key_queue.put_nowait(ch)
+                except queue.Full:
+                    pass
+                if self._demo_stop_event.wait(1.2):
+                    return
+            if self._demo_stop_event.wait(2.0):
+                return
+            try:
+                self.key_queue.put_nowait("\n")
+            except queue.Full:
+                pass
 
     def run(self):
-        print("\n" + "=" * 55)
-        print("  Predictive Key Lights Active")
-        print("  Full-board clean white backlight enabled.")
-        print("  Active keystroke capture running (terminal + global).")
-        print("  Type in any window, browser, or terminal.")
-        print("  Press Ctrl+C to exit.")
-        print("=" * 55 + "\n")
+        mode_str = "Demo" if self.demo else "Live"
+        print(f"\n[PredictiveKeyLights] Active ({mode_str}) | Context: {self.context_len}")
+        print("Type in any window. Press Ctrl+C to exit.\n", flush=True)
 
-        # Initial state: Full keyboard in solid bright white backlight. No red keys until user types!
-        self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
-        if self.show_probs:
-            sys.stdout.write("\r\033[K[Context: (empty)] -> Start typing to see predictions...")
-            sys.stdout.flush()
+        # Initial state: If seed provided, predict immediately; otherwise solid white backlight
+        if self.rolling_buffer:
+            self._update_prediction()
+        else:
+            self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+            if self.show_probs:
+                print("[Context: (empty)] -> Start typing to see predictions...", flush=True)
 
         try:
             while self.running:
@@ -259,11 +299,51 @@ class PredictiveKeyLightsApp:
                     self.last_type_time = time.time()
                     self.is_idle = False
                     for ch in new_chars:
+                        # Auto-pause gaming movement (WASD) and repetitive key holding
+                        if self.auto_pause_wasd:
+                            if ch.lower() in ("w", "a", "s", "d"):
+                                self.wasd_streak += 1
+                            else:
+                                self.wasd_streak = 0
+
+                            if ch == self.last_char and ch not in (" ", "\n", "\b"):
+                                self.repeat_count += 1
+                            else:
+                                self.last_char = ch
+                                self.repeat_count = 1
+
+                            # Trigger gaming pause if 4+ consecutive WASD keystrokes or 5+ identical key repeats
+                            if (self.wasd_streak >= 4 or self.repeat_count >= 5):
+                                if not self.is_gaming:
+                                    self.is_gaming = True
+                                    self.rolling_buffer.clear()
+                                    self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+                                    if self.show_probs:
+                                        print("\n[Gaming Mode] WASD detected. Lighting paused.", flush=True)
+
+                        if self.is_gaming:
+                            if ch in ("\n", " ") or (ch.lower() not in ("w", "a", "s", "d") and ch in VALID_PREDICTIVE_CHARS):
+                                self.is_gaming = False
+                                self.wasd_streak = 0
+                                self.repeat_count = 1
+                                self.rolling_buffer.clear()
+                                if self.show_probs:
+                                    print("[Typing Resumed] Predictions active.", flush=True)
+                            else:
+                                continue
+
                         if ch == "\b":
                             if self.rolling_buffer:
                                 self.rolling_buffer.pop()
+                        elif ch == "\n":
+                            self.rolling_buffer.clear()
                         else:
+                            if ch == " " and self.rolling_buffer and self.rolling_buffer[-1] == " ":
+                                continue
                             self.rolling_buffer.append(ch)
+
+                    if self.is_gaming:
+                        continue
 
                     if len(self.rolling_buffer) > self.context_len:
                         self.rolling_buffer = self.rolling_buffer[-self.context_len:]
@@ -271,20 +351,23 @@ class PredictiveKeyLightsApp:
                     if self.rolling_buffer:
                         self._update_prediction()
                     else:
-                        # Reverted to empty context via backspace: reset all keys to solid white
                         self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
                         if self.show_probs:
-                            sys.stdout.write("\r\033[K[Context: (empty)] -> Start typing to see predictions...")
-                            sys.stdout.flush()
+                            print("[Context: (empty)] -> Start typing to see predictions...", flush=True)
                 else:
-                    # Idle timeout: return to clean white backlight when typing is paused
+                    if self.is_gaming and (time.time() - self.last_type_time > 1.2):
+                        self.is_gaming = False
+                        self.wasd_streak = 0
+                        self.repeat_count = 0
+                        if self.show_probs:
+                            print("[Typing Resumed] Idle timeout.", flush=True)
+
                     if not self.is_idle and (time.time() - self.last_type_time > self.idle_timeout):
                         self.is_idle = True
                         self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
                         if self.show_probs and self.rolling_buffer:
-                            ctx = "".join(self.rolling_buffer)[-12:]
-                            sys.stdout.write(f"\r\033[K[Context: {ctx!r:<12}] -> (Idle pause - keys white)")
-                            sys.stdout.flush()
+                            ctx = "".join(self.rolling_buffer)[-16:]
+                            print(f"[Context: {ctx!r:<16}] -> (Idle)", flush=True)
 
         except KeyboardInterrupt:
             pass
@@ -300,33 +383,47 @@ class PredictiveKeyLightsApp:
         tokens = [self.tokenizer.encode_char(c) for c in active_chars]
         _, probs = self.model.forward(tokens)
 
-        # Ignore ambiguous or degenerate/NaN probability distributions
         if np.isnan(probs).any() or float(np.nanmax(probs)) < 0.02:
             self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
             return
 
-        top_indices = np.argsort(probs)[::-1][:self.top_k]
+        valid_candidates = []
+        for token_id, prob in enumerate(probs):
+            ch = self.tokenizer.decode_id(token_id)
+            if ch in VALID_PREDICTIVE_CHARS:
+                key_name = char_to_key_name(ch)
+                if key_name:
+                    valid_candidates.append((prob, ch, key_name))
+
+        if not valid_candidates:
+            self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+            return
+
+        key_to_best_char = {}
+        key_to_prob = {}
+        for prob, ch, key_name in valid_candidates:
+            if key_name not in key_to_prob or prob > key_to_best_char[key_name][0]:
+                key_to_best_char[key_name] = (prob, ch)
+            key_to_prob[key_name] = key_to_prob.get(key_name, 0.0) + prob
+
+        sorted_keys = sorted(key_to_prob.keys(), key=lambda k: key_to_prob[k], reverse=True)[:self.top_k]
+
         key_colors = {}
         log_items = []
 
-        # Target scheme: All keys normally clean White, predicted keys illuminate in bright Red
-        for rank, token_id in enumerate(top_indices):
-            ch = self.tokenizer.decode_id(token_id)
-            key_name = char_to_key_name(ch)
+        for rank, key_name in enumerate(sorted_keys):
             color = RANK_COLORS[min(rank, len(RANK_COLORS) - 1)]
-
-            if key_name and key_name not in key_colors:
-                key_colors[key_name] = color
-
-            label = repr(ch) if ch in (" ", "\n", "\t") else f"'{ch}'"
-            log_items.append(f"#{rank+1}: {label} ({probs[token_id]*100:.1f}%)")
+            key_colors[key_name] = color
+            best_prob, best_ch = key_to_best_char[key_name]
+            total_prob = key_to_prob[key_name]
+            label = format_prediction_label(best_ch)
+            log_items.append(f"#{rank+1}: {label} ({total_prob*100:.1f}%)")
 
         self.kbd.set_key_colors(key_colors, brightness=self.brightness, clear_others=True, default_background="ffffff")
 
         if self.show_probs:
-            ctx = "".join(self.rolling_buffer)[-12:]
-            sys.stdout.write(f"\r\033[K[Context: {ctx!r:<12}] -> Next: {', '.join(log_items[:3])}")
-            sys.stdout.flush()
+            ctx = "".join(self.rolling_buffer)[-16:]
+            print(f"[Context: {ctx!r:<16}] -> Predicted: {', '.join(log_items[:3])}", flush=True)
 
         if self.show_attn and self.model.last_attn_weights is not None:
             ctx_tokens = active_chars[-min(8, len(active_chars)):]
@@ -337,6 +434,13 @@ class PredictiveKeyLightsApp:
 
     def cleanup(self):
         self.running = False
+        if hasattr(self, "_demo_stop_event"):
+            self._demo_stop_event.set()
+        if hasattr(self, "demo_thread") and self.demo_thread is not None and self.demo_thread.is_alive():
+            try:
+                self.demo_thread.join(timeout=0.5)
+            except Exception:
+                pass
         self.input_reader.stop()
         self.kbd.close()
 
@@ -349,11 +453,14 @@ def main():
     parser.add_argument("--profile", type=str, default="hive75", help="Keyboard profile (default: hive75)")
     parser.add_argument("--top-k", type=int, default=5, help="Number of predicted keys to illuminate (1-5)")
     parser.add_argument("--brightness", type=float, default=1.0, help="LED brightness scale (0.0 to 1.0)")
-    parser.add_argument("--context-len", type=int, default=12, help="Context sequence length")
+    parser.add_argument("--context-len", type=int, default=48, help="Context sequence length (default: 48)")
     parser.add_argument("--show-probs", action="store_true", help="Print live top predictions to terminal")
     parser.add_argument("--show-attn", action="store_true", help="Visualize causal attention matrix")
     parser.add_argument("--mock", action="store_true", help="Force mock mode (no physical keyboard required)")
     parser.add_argument("--idle-timeout", type=float, default=6.0, help="Seconds before dimming during typing pause")
+    parser.add_argument("--demo", action="store_true", help="Run automated typing demo showing predictions live")
+    parser.add_argument("--seed", type=str, default="", help="Initial text prompt to seed predictions")
+    parser.add_argument("--no-auto-pause-wasd", action="store_true", help="Disable automatic pause on WASD movement / key spam")
     args = parser.parse_args()
 
     app = PredictiveKeyLightsApp(
@@ -365,7 +472,10 @@ def main():
         show_probs=args.show_probs,
         show_attn=args.show_attn,
         mock=args.mock,
-        idle_timeout=args.idle_timeout
+        idle_timeout=args.idle_timeout,
+        demo=args.demo,
+        seed=args.seed,
+        auto_pause_wasd=not args.no_auto_pause_wasd
     )
     app.run()
 
