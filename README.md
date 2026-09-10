@@ -17,10 +17,10 @@
 
 <div align="center">
   <video controls="controls" width="100%" style="max-width: 720px; border-radius: 8px;">
-    <source src="https://github.com/Drix10/keystroke-llm/raw/refs/heads/main/DemoVideo.mp4" type="video/mp4" />
-    Your browser cannot play the video. <a href="https://github.com/Drix10/keystroke-llm/blob/main/DemoVideo.mp4">Open the demo video</a>.
+    <source src="https://raw.githubusercontent.com/Drix10/keystroke-llm/main/DemoVideo.mp4" type="video/mp4" />
+    Your browser cannot play the video. <a href="https://raw.githubusercontent.com/Drix10/keystroke-llm/main/DemoVideo.mp4">Open the demo video</a>.
   </video>
-  <p><a href="https://github.com/Drix10/keystroke-llm/blob/main/DemoVideo.mp4">Open the demo video if the player does not load</a></p>
+  <p><a href="https://raw.githubusercontent.com/Drix10/keystroke-llm/main/DemoVideo.mp4">Open the demo video if the player does not load</a></p>
 </div>
 
 <p align="center">
