@@ -236,11 +236,8 @@ class TinyTransformer:
         d_attn_weights = matmul(d_context, transpose(c["V"]))
         dV = matmul(transpose(c["attn_weights"]), d_context)
 
-        d_masked = np.zeros_like(c["masked_scores"])
-        for i in range(T):
-            s = c["attn_weights"][i]
-            da = d_attn_weights[i]
-            d_masked[i] = s * (da - np.dot(da, s))
+        sum_da_s = np.sum(d_attn_weights * c["attn_weights"], axis=-1, keepdims=True)
+        d_masked = c["attn_weights"] * (d_attn_weights - sum_da_s)
         d_masked[self.causal_mask_bool[:T, :T]] = 0.0
 
         d_raw = d_masked / np.sqrt(d_k)

@@ -127,13 +127,13 @@ def train():
     val_size = int(len(dataset) * args.val_split) if args.val_split > 0 else 0
     train_dataset = dataset[: len(dataset) - val_size]
     val_dataset = dataset[len(dataset) - val_size :]
-    print(f"Loaded {len(text)} characters | train: {len(train_dataset)}, val: {len(val_dataset)} samples | vocab={tokenizer.vocab_size}")
+    print(f"Loaded {len(text)} characters | train: {len(train_dataset)}, val: {len(val_dataset)} samples | vocab={tokenizer.vocab_size}", flush=True)
 
     if not train_dataset:
         raise ValueError("Training split is empty after validation holdout. Use a longer text or reduce --val-split.")
 
     test_prompts = ["How are ", "Thank ", "Good ", "The qui", "def hel", "I am ", "What is ", "Please "]
-    print("Initial baseline:")
+    print("Initial baseline:", flush=True)
     evaluate_predictions(model, tokenizer, test_prompts)
 
     csv_path = os.path.join(args.checkpoint_dir, "loss_log.csv")
@@ -141,7 +141,7 @@ def train():
     csv_writer = csv.writer(csv_file)
     csv_writer.writerow(["epoch", "train_loss", "val_loss", "time_s"])
 
-    print(f"Training for {args.epochs} epochs in '{args.mode}' mode (lr={args.lr}, stride={args.stride})...")
+    print(f"Training for {args.epochs} epochs in '{args.mode}' mode (lr={args.lr}, stride={args.stride})...", flush=True)
     start = time.time()
 
     for epoch in range(1, args.epochs + 1):
@@ -161,7 +161,7 @@ def train():
         val_loss = compute_val_loss(model, val_dataset)
         ep_time = time.time() - ep_start
         val_str = f"{val_loss:.4f}" if not np.isnan(val_loss) else "n/a"
-        print(f"Epoch {epoch:2d}/{args.epochs:2d} | Train Loss: {avg_loss:.4f} | Val Loss: {val_str} | Time: {ep_time:.2f}s")
+        print(f"Epoch {epoch:2d}/{args.epochs:2d} | Train Loss: {avg_loss:.4f} | Val Loss: {val_str} | Time: {ep_time:.2f}s", flush=True)
         csv_writer.writerow([epoch, f"{avg_loss:.6f}", f"{val_loss:.6f}", f"{ep_time:.2f}"])
         csv_file.flush()
 
@@ -170,13 +170,13 @@ def train():
             model.save_checkpoint(ckpt_path, vocab=tokenizer.vocab)
 
     csv_file.close()
-    print(f"\nFinished training in {time.time() - start:.2f}s")
-    print(f"Loss log saved to {csv_path}")
+    print(f"\nFinished training in {time.time() - start:.2f}s", flush=True)
+    print(f"Loss log saved to {csv_path}", flush=True)
     evaluate_predictions(model, tokenizer, test_prompts)
 
     final_path = os.path.join(args.checkpoint_dir, "model_final.npz")
     model.save_checkpoint(final_path, vocab=tokenizer.vocab)
-    print(f"Saved primary checkpoint to {final_path}")
+    print(f"Saved primary checkpoint to {final_path}", flush=True)
 
 
 if __name__ == "__main__":

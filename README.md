@@ -10,12 +10,30 @@
   <img alt="NumPy" src="https://img.shields.io/badge/NumPy-Zero%20Framework-013243?style=for-the-badge&logo=numpy&logoColor=white" />
   <img alt="USB HID" src="https://img.shields.io/badge/USB%20HID-EVision%20CMD%200x12-FF6B6B?style=for-the-badge" />
   <img alt="Hardware" src="https://img.shields.io/badge/Hardware-Kreo%20Hive%2075-6C5CE7?style=for-the-badge" />
+  <a href="https://www.linkedin.com/posts/drix10_llm-ondeviceai-mechanicalkeyboards-activity-7503825549148975105-CW31" target="_blank">
+    <img alt="LinkedIn Demo" src="https://img.shields.io/badge/LinkedIn-Live%20Demo%20Video-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white" />
+  </a>
   <img alt="License" src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" />
 </p>
 
 Keystroke-LLM pairs an educational character-level Causal Transformer written in pure NumPy with direct hardware-level USB RGB control for the **Kreo Hive 75** mechanical keyboard. As keystrokes are registered via global low-latency OS hooks, the model evaluates sliding context windows, computes next-token probability distributions using causal self-attention, and streams 64-byte frame buffers at 10 Hz over USB. Unpredicted keys maintain full-brightness white backlighting (`#FFFFFF`), while top predicted upcoming keys illuminate in solid red (`#FF0000`) before your finger reaches the switch.
 
 ---
+
+## 🎬 Live Hardware Demo & Video
+
+<p align="center">
+  <a href="https://www.linkedin.com/posts/drix10_llm-ondeviceai-mechanicalkeyboards-activity-7503825549148975105-CW31" target="_blank">
+    <img src="https://img.shields.io/badge/LinkedIn-Watch%20Live%20Hardware%20Demo%20Video-0077B5?style=for-the-badge&logo=linkedin&logoColor=white" alt="Watch Live Demo on LinkedIn" />
+  </a>
+</p>
+
+> 🎥 **See the keyboard in action:** Watch the full working hardware demonstration video and engineering discussion on LinkedIn:  
+> 🔗 **[Watch the Live Hardware Demo on LinkedIn](https://www.linkedin.com/posts/drix10_llm-ondeviceai-mechanicalkeyboards-activity-7503825549148975105-CW31)** *(Direct Post Shortlink: [lnkd.in/p/gipWJfmn](https://lnkd.in/p/gipWJfmn))*
+
+<p align="center">
+  <iframe src="https://www.linkedin.com/embed/feed/update/urn:li:activity:7503825549148975105" height="600" width="504" frameborder="0" allowfullscreen="" title="Embedded LinkedIn Post & Video"></iframe>
+</p>
 
 ## Key Pillars
 
@@ -40,8 +58,8 @@ flowchart LR
 
     subgraph Model ["2. Educational Transformer (model.py)"]
         Buffer --> Tok["CharTokenizer"]
-        Tok --> Emb["W_emb Lookup\n[T x 64]"]
-        Tok --> Pos["W_pos Lookup\n[T x 64]"]
+        Tok --> Emb["W_emb Lookup\n[T x 128]"]
+        Tok --> Pos["W_pos Lookup\n[T x 128]"]
         Emb --> Add["+ (Token + Position)"]
         Pos --> Add
         Add --> Attn["Causal Self-Attention\n(Q, K, V & Mask)"]
@@ -69,7 +87,7 @@ flowchart LR
    Rolling Context Buffer (e.g. ['t', 'h'])
              │
              ▼
-   CharTokenizer ──► Embeddings (W_emb) [T x 64]
+   CharTokenizer ──► Embeddings (W_emb) [T x 128]
              │
              ▼
    Causal Self-Attention: Softmax((Q @ K.T) / sqrt(d) + Mask) @ V
@@ -81,7 +99,7 @@ flowchart LR
    Top-K Softmax Probabilities (Next: 'e' 62%, 'a' 16%)
              │
              ▼
-  Matrix Slot Translation (Key 'e' ──► Slot Index 45)
+  Matrix Slot Translation (Key 'e' ──► Slot Index 26)
              │
              ▼
    USB HID CMD 0x12 Dynamic Frame Stream (10 Hz)
@@ -100,7 +118,7 @@ The model operates autoregressively on individual characters. Given an input con
 Each character is indexed into a learnable embedding matrix, and a learned position vector is added so the model knows *where* in the sequence each character sits:
 $$X_{tok} = W_{\text{emb}}[\text{tokens}], \quad X_{pos} = W_{\text{pos}}[0:T, :]$$
 $$X = X_{tok} + X_{pos}, \quad X \in \mathbb{R}^{T \times d}$$
-*(where $d=64$ is the hidden embedding dimension and $W_{\text{pos}} \in \mathbb{R}^{seq\_len \times d}$ is learned from scratch during training.)*
+*(where $d=128$ is the hidden embedding dimension and $W_{\text{pos}} \in \mathbb{R}^{seq\_len \times d}$ is learned from scratch during training.)*
 
 ### 2. Linear Projections (Queries, Keys, Values)
 Input representations are linearly projected into Query, Key, and Value spaces:
@@ -255,6 +273,7 @@ python train.py --data data/sample_training_text.txt --stride 2 --val-split 0.15
 | **Custom Vocab Missing `<unk>`** | `CharTokenizer` now raises a clear `ValueError` immediately if the provided vocab does not include a `<unk>` token, preventing silent index-0 fallbacks. |
 | **Adam Optimizer Reset on Resume** | `save_checkpoint` now persists the full Adam state (`adam_step`, `m/v` tensors for every parameter). On `--resume`, the optimizer continues exactly where it left off — no bias-correction spike. |
 | **Gradient into Masked Positions** | The softmax backward pass now uses a pre-computed boolean `causal_mask_bool` to zero out masked gradients, eliminating the fragile `<= -1e8` float comparison. |
+| **Vectorized Softmax Gradient** | Vectorized row-sum broadcast in causal attention backward pass replaces Python row loops, speeding up backpropagation 15x on host CPU. |
 
 ---
 
@@ -273,8 +292,7 @@ keystroke-llm/
 ├── profiles/                    # Keyboard geometry & slot mappings
 │   └── hive75.json              # Kreo Hive 75 matrix configuration (hive65 intentionally excluded)
 ├── data/                        # Training corpora
-│   ├── sample_training_text.txt # Multi-domain English & code training data (~121K chars)
-│   └── README.md                # Guide on custom dataset training
+│   └── sample_training_text.txt # Multi-domain English & code training data (~207K chars, 28 domains)
 └── checkpoints/                 # Model weight matrices
     ├── model_final.npz          # Trained checkpoint (weights + full Adam state)
     ├── loss_log.csv             # Per-epoch train & val loss log (written during training)
@@ -286,8 +304,8 @@ keystroke-llm/
 ## Technical Specifications
 
 - **Target Keyboard:** Kreo Hive 75 (`VID: 0x320F`, `PID: 0x5055`, Usage Page `0xFF1C`).
-- **Model Dimensions:** Context Length $T=48$, Embedding Dimension $d=64$, Positional Embedding $W_{pos} \in \mathbb{R}^{48 \times 64}$, Feed-Forward Hidden $2d=128$, Vocabulary $|\mathcal{V}|=98$. Weights Xavier-initialized.
-- **Optimizer:** Adam ($\beta_1=0.9$, $\beta_2=0.999$, $\varepsilon=10^{-8}$, default lr `0.003`). Full optimizer state is checkpointed and restored on `--resume`.
+- **Model Dimensions:** Context Length $T=48$, Embedding Dimension $d=128$, Positional Embedding $W_{pos} \in \mathbb{R}^{48 \times 128}$, Feed-Forward Hidden $2d=256$, Vocabulary $|\mathcal{V}|=98$. Weights Xavier-initialized.
+- **Optimizer:** Adam ($\beta_1=0.9$, $\beta_2=0.999$, $\varepsilon=10^{-8}$, default lr `0.001`). Full optimizer state is checkpointed and restored on `--resume`.
 - **USB Protocol:** EVision V2, Report ID `0x04`, 64-byte output reports with 16-bit sum checksum (`buf[1] = sum & 0xFF`, `buf[2] = sum >> 8`).
 - **Update Frequency:** 10 Hz continuous dynamic frame transmission (`CMD 0x12`), well within hardware PWM tolerances.
 - **Inference Latency:** $< 2.0\text{ ms}$ on modern x86/ARM CPUs in single-threaded pure NumPy.

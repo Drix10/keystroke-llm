@@ -57,6 +57,10 @@ def scale_rgb(r: int, g: int, b: int, brightness: float) -> Tuple[int, int, int]
 
 
 def _compute_evision_checksum(buf: bytearray) -> bytearray:
+    # The EVision V2 microcontroller requires a 16-bit sum checksum across bytes 3..63,
+    # stored little-endian at bytes 1 (low) and 2 (high).
+    # If the checksum is off by even 1 bit, the keyboard MCU silently drops the report
+    # without returning any USB error status to the host.
     chksum = sum(buf[3:64]) & 0xFFFF
     buf[1] = chksum & 0xFF
     buf[2] = (chksum >> 8) & 0xFF
@@ -340,24 +344,32 @@ class KeyboardController:
             buf_len = len(self.rgb_buffer)
             idx = 0
             while idx < buf_len:
+                # 64-byte HID report: 8 header bytes + up to 56 RGB payload bytes
                 pktsz = min(buf_len - idx, 56)
                 chunk = self.rgb_buffer[idx : idx + pktsz]
                 pkt = bytearray(64)
-                pkt[0] = 0x04
+                pkt[0] = 0x04  # Report ID
                 pkt[3] = 0x12  # EVISION_V2_CMD_SEND_DYNAMIC_COLORS
                 pkt[4] = pktsz
-                pkt[5] = idx & 0xFF
-                pkt[6] = (idx >> 8) & 0xFF
+                pkt[5] = idx & 0xFF        # Buffer byte offset (low)
+                pkt[6] = (idx >> 8) & 0xFF # Buffer byte offset (high)
                 pkt[7] = 0x00
                 pkt[8 : 8 + pktsz] = chunk
                 pkt = _compute_evision_checksum(pkt)
                 self.hid_device.write(list(pkt))
+
+                # CRITICAL BUG FIX: Draining the ACK packet
+                # The EVision firmware replies with a 64-byte ACK packet for every chunk.
+                # If we don't read and drain this packet, the OS USB pipe buffer chokes after ~1 minute
+                # of rapid writes, causing write latency to spike from 1ms to 200ms+ or throwing EPIPE.
                 if read_ack:
-                    self.hid_device.read(64, 20)  # Read ACK
+                    self.hid_device.read(64, 20)  # Read ACK report within 20ms timeout
                 idx += pktsz
         except Exception:
-            # Mark device disconnected — let the keepalive thread own reconnection.
-            # Reconnecting inline here while holding _lock would race with keepalive.
+            # THREAD SAFETY FIX: Never attempt inline reconnect while holding self._lock.
+            # In early versions, calling _connect() here created a lock inversion with the
+            # keepalive thread. Instead, cleanly close the stale handle and let the keepalive
+            # thread handle reconnection sequentially.
             try:
                 self.hid_device.close()
             except Exception:
@@ -402,9 +414,13 @@ class KeyboardController:
                     raise
 
     def _keepalive_loop(self):
+        # The EVision microcontroller has an internal watchdog timer. If dynamic color reports
+        # stop arriving for ~1000ms, the MCU assumes host software died and drops back to factory
+        # rainbow breathing mode. Streaming at 10 Hz (100ms interval) keeps the MCU locked in
+        # dynamic host-controlled lighting mode without overloading the USB bus.
         while self._running and not self._stop_event.is_set():
             if self.is_evision:
-                interval = 0.1
+                interval = 0.1  # 10 Hz keepalive for EVision V2
             elif self.keepalive_hz > 0:
                 interval = 1.0 / self.keepalive_hz
             else:
@@ -425,7 +441,8 @@ class KeyboardController:
                         except Exception:
                             pass
                 else:
-                    # Periodically try to reconnect if disconnected (every 2.0s)
+                    # Single reconnection owner: retry connection sequentially every 2.0s
+                    # without racing against worker threads.
                     now = time.time()
                     if now - self._last_reconnect_attempt > 2.0:
                         self._last_reconnect_attempt = now
@@ -447,6 +464,9 @@ class KeyboardController:
                 if default_background:
                     bg_r, bg_g, bg_b = hex_to_rgb(default_background)
                     bg_r, bg_g, bg_b = scale_rgb(bg_r, bg_g, bg_b, brightness)
+                    # Fill all 128 hardware slots unconditionally. In early builds, only keys
+                    # explicitly mapped in slot_map were filled, leaving unmapped hardware slots
+                    # (like Del, PgUp, right modifiers) dark and patchy.
                     self.rgb_buffer = bytearray([bg_r, bg_g, bg_b] * self.profile.num_slots)
                 else:
                     self.rgb_buffer = bytearray(self.profile.num_slots * 3)

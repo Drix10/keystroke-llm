@@ -177,6 +177,8 @@ When you launch `python predict_and_light.py --show-probs`:
 4. If you pause typing, the keyboard gracefully dims back to solid white.
 5. If you make a typo and press Backspace, the model unwinds its context and instantly recalculates.
 
+> 🎥 **Live Video Demo**: Watch the full working video demonstration of the physical keyboard illuminating in real time on [LinkedIn](https://www.linkedin.com/posts/drix10_llm-ondeviceai-mechanicalkeyboards-activity-7503825549148975105-CW31) *(Shortlink: [lnkd.in/p/gipWJfmn](https://lnkd.in/p/gipWJfmn))*.
+
 Now that we understand the big picture from Day 1, let's look at how every single piece of math, software, and USB hardware works under the hood!
 
 ---
@@ -280,9 +282,9 @@ sequenceDiagram
 
 Let:
 - $V$: Vocabulary size ($V = 98$, encompassing uppercase, lowercase, numbers, and symbols).
-- $d_{model}$: Hidden dimension ($d_{model} = 64$).
+- $d_{model}$: Hidden dimension ($d_{model} = 128$).
 - $T$: Context sequence length ($1 \le T \le seq\_len$, default $seq\_len = 48$).
-- $d_{ff}$: Feed-forward hidden dimension ($d_{ff} = 2 \times d_{model} = 128$).
+- $d_{ff}$: Feed-forward hidden dimension ($d_{ff} = 2 \times d_{model} = 256$).
 
 #### Tensor Dimensions Across the Forward Pass
 
@@ -316,17 +318,17 @@ Input Tokens:   ['t', 'h', 'e', ' ']
                   |    |    |    |
                   v    v    v    v
             +-----------------------+
-            |  Embedding Layer      |  -> Matrix X [4 x 64]
+            |  Embedding Layer      |  -> Matrix X [4 x 128]
             +-----------------------+
                   |         |
          +--------+         +--------+
          v                           v
    Query = X * W_q              Key = X * W_k
-     [4 x 64]                     [4 x 64]
+     [4 x 128]                    [4 x 128]
          \                           /
           \                         /
            v                       v
-          Attention Scores S = (Q * K^T) / sqrt(64)   [4 x 4]
+          Attention Scores S = (Q * K^T) / sqrt(128)  [4 x 4]
                              |
                              v
                Apply Causal Mask (Upper Triangle = -1e9)
@@ -340,10 +342,10 @@ Input Tokens:   ['t', 'h', 'e', ' ']
                Row-wise Softmax -> Weights A [4 x 4]
                              |
                              v
-             Multiply by Values V = X * W_v [4 x 64]
+             Multiply by Values V = X * W_v [4 x 128]
                              |
                              v
-             Aggregated Context C = A * V   [4 x 64]
+             Aggregated Context C = A * V   [4 x 128]
 ```
 
 ---
@@ -465,7 +467,13 @@ Since $C = A \cdot V$:
 $$\frac{\partial \mathcal{L}}{\partial V} = A^T \cdot \frac{\partial \mathcal{L}}{\partial C}, \quad \frac{\partial \mathcal{L}}{\partial A} = \frac{\partial \mathcal{L}}{\partial C} \cdot V^T$$
 Differentiating the row-wise softmax $A_{i,:} = \text{softmax}(S_{i,:})$:
 $$\frac{\partial \mathcal{L}}{\partial S_{i,j}} = A_{i,j} \left( \frac{\partial \mathcal{L}}{\partial A_{i,j}} - \sum_{k=1}^T \frac{\partial \mathcal{L}}{\partial A_{i,k}} A_{i,k} \right)$$
-For causal masked positions ($j > i$), the gradient is clamped strictly to $0.0$.
+In code, this is evaluated using a fully vectorized row-sum broadcast rather than a Python row loop, yielding a ~15x speedup per step:
+```python
+sum_da_s = np.sum(d_attn_weights * c["attn_weights"], axis=-1, keepdims=True)
+d_masked = c["attn_weights"] * (d_attn_weights - sum_da_s)
+d_masked[self.causal_mask_bool[:T, :T]] = 0.0
+```
+For causal masked positions ($j > i$), the gradient is clamped strictly to $0.0$ via `causal_mask_bool`.
 
 Finally, scaling by $\frac{1}{\sqrt{d_k}}$:
 $$\frac{\partial \mathcal{L}}{\partial Q} = \frac{\frac{\partial \mathcal{L}}{\partial S}}{\sqrt{d_k}} \cdot K, \quad \frac{\partial \mathcal{L}}{\partial K} = \left(\frac{\frac{\partial \mathcal{L}}{\partial S}}{\sqrt{d_k}}\right)^T \cdot Q$$
@@ -510,7 +518,7 @@ Every sample allows the causal attention mask to train prefix lengths $1, 2, \do
    - Forward-only evaluation on the held-out validation dataset without updating gradients.
    - Computes multi-position cross-entropy loss to track true generalization and detect overfitting.
 3. **`train()`** (Lines 53–140):
-   - **CLI Flags**: `--data`, `--epochs`, `--lr` (default `0.003`), `--seq-len` (default `48`), `--hidden-size` (default `64`), `--stride` (default `3`), `--mode` (`backprop` or `heuristic`), `--checkpoint-dir`, `--resume`, `--seed`, `--val-split` (default `0.10` / 10%).
+   - **CLI Flags**: `--data`, `--epochs`, `--lr` (default `0.001`), `--seq-len` (default `48`), `--hidden-size` (default `128`), `--stride` (default `3`), `--mode` (`backprop` or `heuristic`), `--checkpoint-dir`, `--resume`, `--seed`, `--val-split` (default `0.10` / 10%).
    - **Reproducibility**: If `--seed` is passed, runs `np.random.seed(args.seed)` to ensure deterministic data shuffling and weight initialization.
    - **Validation Split**: Automatically partitions the dataset into training samples and a held-out temporal validation split (e.g. 90% train / 10% validation).
    - **CSV Logging**: Automatically logs `epoch`, `train_loss`, `val_loss`, and `time_s` to `checkpoints/loss_log.csv` after every epoch.

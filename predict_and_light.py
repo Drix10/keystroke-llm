@@ -107,13 +107,16 @@ class LowLatencyInputReader:
         self.thread.start()
 
     def _enqueue(self, ch: str):
-        # Normalize carriage return to newline and DEL to backspace
+        # Normalize carriage return to newline and DEL to backspace.
+        # Different terminals (PowerShell, Windows Terminal, bash) emit different byte
+        # codes for Enter (\r vs \n) and Backspace (\x7f vs \b).
         if ch == "\r":
             ch = "\n"
         elif ch == "\x7f":
             ch = "\b"
 
-        # Check for Ctrl+C
+        # On Windows, msvcrt.getch() intercepts Ctrl+C (b'\x03') as a raw byte instead of
+        # raising KeyboardInterrupt. We manually signal interrupt_main() to allow clean exit.
         if ch == "\x03":
             try:
                 _thread.interrupt_main()
@@ -121,11 +124,13 @@ class LowLatencyInputReader:
                 pass
             return
 
-        # Ignore unprintable control characters except whitespace / backspace
+        # Filter out unprintable terminal control sequences while preserving whitespace
         if ord(ch) < 32 and ch not in ("\n", "\t", "\b"):
             return
 
-        # Debounce: avoid duplicate events if identical key fires within 15ms
+        # 15ms debounce window prevents mechanical switch contact bounce from registering twice.
+        # MEMORY SAFETY FIX: Prune the debounce dictionary when it exceeds 256 keys so long
+        # typing sessions don't leak memory over time.
         now = time.time()
         if len(self._last_key_time) > 256:
             sorted_items = sorted(self._last_key_time.items(), key=lambda item: item[1])
@@ -285,6 +290,11 @@ class PredictiveKeyLightsApp:
         try:
             while self.running:
                 try:
+                    # BATCH QUEUE DRAINING:
+                    # If the user types rapidly (e.g. 80-120 WPM burst), processing keystrokes
+                    # one-by-one would introduce a backlog queue. Instead, we block for 5ms on the
+                    # first character, then drain all pending strokes immediately. Forward inference
+                    # and USB lighting only execute once for the newest tail character.
                     first_ch = self.key_queue.get(timeout=0.005)
                     new_chars = [first_ch]
                     while not self.key_queue.empty():
@@ -299,7 +309,11 @@ class PredictiveKeyLightsApp:
                     self.last_type_time = time.time()
                     self.is_idle = False
                     for ch in new_chars:
-                        # Auto-pause gaming movement (WASD) and repetitive key holding
+                        # GAMING AUTO-PAUSE STATE MACHINE:
+                        # When playing an FPS or movement-heavy game, spamming W/A/S/D or holding
+                        # strafe keys causes a language model to hallucinate random predictions,
+                        # turning the keyboard into an annoying disco strobe.
+                        # We detect movement patterns: >= 4 WASD keys or >= 5 identical repeats.
                         if self.auto_pause_wasd:
                             if ch.lower() in ("w", "a", "s", "d"):
                                 self.wasd_streak += 1
@@ -312,7 +326,7 @@ class PredictiveKeyLightsApp:
                                 self.last_char = ch
                                 self.repeat_count = 1
 
-                            # Trigger gaming pause if 4+ consecutive WASD keystrokes or 5+ identical key repeats
+                            # Trigger gaming pause: clear context buffer and revert to solid white backlight
                             if (self.wasd_streak >= 4 or self.repeat_count >= 5):
                                 if not self.is_gaming:
                                     self.is_gaming = True
@@ -321,6 +335,8 @@ class PredictiveKeyLightsApp:
                                     if self.show_probs:
                                         print("\n[Gaming Mode] WASD detected. Lighting paused.", flush=True)
 
+                        # Once in gaming mode, ignore movement keys.
+                        # Seamlessly wake up when typing real text (Enter, Space, or non-WASD printable chars).
                         if self.is_gaming:
                             if ch in ("\n", " ") or (ch.lower() not in ("w", "a", "s", "d") and ch in VALID_PREDICTIVE_CHARS):
                                 self.is_gaming = False

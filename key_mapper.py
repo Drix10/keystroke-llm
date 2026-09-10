@@ -9,7 +9,10 @@ map directly, and shifted-symbol pairs share the same physical key (= / +,
 
 import string
 
-# Mapping from input character to Kreo Hive profile key name (US QWERTY layout)
+# Mapping from input character to Kreo Hive profile physical key name.
+# Physical keyboard switches are unshifted; typing '!' or 'A' physically depresses
+# the '1' or 'a' key switch with Shift held. Therefore, all shifted symbols and uppercase
+# letters must map to their corresponding physical switch name to illuminate the correct key.
 CHAR_TO_KEY = {
     **{c: c for c in string.ascii_lowercase},
     **{c.upper(): c for c in string.ascii_lowercase},
@@ -17,7 +20,7 @@ CHAR_TO_KEY = {
     " ": "space", "\t": "tab", "\n": "enter", "\r": "enter", "\b": "backspace",
     "-": "minus", "=": "equal", "[": "lbracket", "]": "rbracket", "\\": "backslash",
     ";": "semicolon", "'": "quote", ",": "comma", ".": "period", "/": "slash", "`": "grave",
-    # Shifted punctuation — map to the physical key that produces them
+    # Shifted punctuation — map directly to the base physical switch
     "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8",
     "(": "9", ")": "0", "_": "minus", "+": "equal", "{": "lbracket", "}": "rbracket",
     "|": "backslash", ":": "semicolon", '"': "quote", "<": "comma", ">": "period",
