@@ -22,13 +22,10 @@ Keystroke-LLM pairs an educational character-level Causal Transformer written in
 
 ## 🎬 Live Hardware Demo & Video
 
-<p align="center">
-  <video src="DemoVideo.mp4" controls="controls" muted="muted" width="100%" poster="demo_poster.png">
-    <a href="DemoVideo.mp4">
-      <img src="demo_poster.png" alt="Keystroke-LLM Hardware Demo" width="100%" />
-    </a>
+<div align="center">
+  <video src="https://github.com/Drix10/keystroke-llm/raw/main/DemoVideo.mp4" controls="controls" width="100%" style="max-width: 720px; border-radius: 8px;">
   </video>
-</p>
+</div>
 
 <p align="center">
   <a href="https://www.linkedin.com/posts/drix10_llm-ondeviceai-mechanicalkeyboards-activity-7503825549148975105-CW31" target="_blank">
