@@ -1,319 +1,274 @@
 # Keystroke-LLM
 
 <p align="center">
-  <strong>Predictive next-character Transformer running live on the Kreo Hive 75 mechanical keyboard.</strong><br />
-  From raw OS keystroke telemetry to zero-dependency neural inference to per-key USB RGB illumination; neural forward inference is measured at about 0.044ms, while end-to-end latency depends on OS scheduling and USB hardware.
+  <strong>A tiny language model that turns your keyboard into its own prediction display.</strong><br />
+  Type a character. The model guesses what comes next. The Kreo Hive 75 lights the answer.
 </p>
 
 <p align="center">
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.9%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" />
-  <img alt="NumPy" src="https://img.shields.io/badge/NumPy-Zero%20Framework-013243?style=for-the-badge&logo=numpy&logoColor=white" />
+  <img alt="Python 3.9+" src="https://img.shields.io/badge/Python-3.9%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" />
+  <img alt="NumPy" src="https://img.shields.io/badge/NumPy-Only%20ML%20Runtime-013243?style=for-the-badge&logo=numpy&logoColor=white" />
   <img alt="USB HID" src="https://img.shields.io/badge/USB%20HID-EVision%20CMD%200x12-FF6B6B?style=for-the-badge" />
   <img alt="Hardware" src="https://img.shields.io/badge/Hardware-Kreo%20Hive%2075-6C5CE7?style=for-the-badge" />
-  <a href="https://www.linkedin.com/posts/drix10_llm-ondeviceai-mechanicalkeyboards-activity-7503825549148975105-CW31" target="_blank">
-    <img alt="LinkedIn Demo" src="https://img.shields.io/badge/LinkedIn-Live%20Demo%20Video-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white" />
-  </a>
   <img alt="License" src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" />
 </p>
 
-Keystroke-LLM pairs an educational character-level Causal Transformer written in pure NumPy with direct hardware-level USB RGB control for the **Kreo Hive 75** mechanical keyboard. As keystrokes are registered via global low-latency OS hooks, the model evaluates sliding context windows, computes next-token probability distributions using causal self-attention, and streams 64-byte frame buffers at 10 Hz over USB. Unpredicted keys maintain full-brightness white backlighting (`#FFFFFF`), while top predicted upcoming keys illuminate in solid red (`#FF0000`) before your finger reaches the switch.
-
----
-
-## 🎬 Live Hardware Demo & Video
+## See It First
 
 <div align="center">
-  <video src="https://github.com/Drix10/keystroke-llm/raw/main/DemoVideo.mp4" controls="controls" width="100%" style="max-width: 720px; border-radius: 8px;">
+  <video controls="controls" width="100%" style="max-width: 720px; border-radius: 8px;">
+    <source src="https://github.com/Drix10/keystroke-llm/raw/refs/heads/main/DemoVideo.mp4" type="video/mp4" />
+    Your browser cannot play the video. <a href="https://github.com/Drix10/keystroke-llm/blob/main/DemoVideo.mp4">Open the demo video</a>.
   </video>
+  <p><a href="https://github.com/Drix10/keystroke-llm/blob/main/DemoVideo.mp4">Open the demo video if the player does not load</a></p>
 </div>
 
 <p align="center">
-  <a href="https://www.linkedin.com/posts/drix10_llm-ondeviceai-mechanicalkeyboards-activity-7503825549148975105-CW31" target="_blank">
-    <img src="https://img.shields.io/badge/LinkedIn-Join%20the%20Discussion%20%26%20Post-0077B5?style=for-the-badge&logo=linkedin&logoColor=white" alt="LinkedIn Post & Discussion" />
+  <a href="https://www.linkedin.com/posts/drix10_llm-ondeviceai-mechanicalkeyboards-activity-7503825549148975105-CW31">
+    <img alt="LinkedIn engineering discussion" src="https://img.shields.io/badge/LinkedIn-Engineering%20Discussion-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white" />
   </a>
 </p>
 
-> 🎥 **See the keyboard in action:** The video above shows real-time next-character illumination on the Kreo Hive 75 mechanical keyboard.  
-> 🔗 Read the full engineering breakdown and community discussion on **[LinkedIn](https://www.linkedin.com/posts/drix10_llm-ondeviceai-mechanicalkeyboards-activity-7503825549148975105-CW31)** *(Shortlink: [lnkd.in/p/gipWJfmn](https://lnkd.in/p/gipWJfmn))*.
+## The Idea
 
-## Key Pillars
+Most language models show their predictions on a screen. Keystroke-LLM puts the prediction under your fingers.
 
-1. **Zero-Framework Causal Transformer (`model.py`):** Implemented completely from scratch in pure NumPy without PyTorch, TensorFlow, or ONNX. Features learnable character embeddings, **learned positional embeddings** (`W_pos`), scaled dot-product attention with strict upper-triangular causal masking, ReLU feed-forward blocks, dual residual connections, and numerically stable softmax classification. Weights are Xavier/Glorot initialized. Includes a `generate()` method with temperature and nucleus (top-p) sampling.
-2. **Deterministic Kreo Hive 75 HID Driver (`hardware_controller.py`):** Directly controls hardware LEDs via the native EVision vendor interface (`0x320F:0x5055`, Usage Page `0xFF1C`, Report ID 4, 64-byte packets, 16-bit sum checksum). Runs an internal 10 Hz dynamic frame stream (`CMD 0x12`) to prevent firmware timeout blackouts. Reconnection is owned exclusively by the keepalive thread to eliminate lock races.
-3. **Global Low-Latency Ingestion (`predict_and_light.py`):** Asynchronous OS-level keyboard hooks (`pynput`) intercept keystrokes system-wide across any focused application (browsers, IDEs, games, terminals). A bounded queue decouples capture from prediction; if it fills, excess incoming events are dropped while capture remains non-blocking.
-4. **Auto-Pause WASD / Gaming Mode (`predict_and_light.py`):** Holding or spamming movement keys (WASD streak >= 4) or rapid repeated key holding (>= 5 repeats) automatically pauses predictive red highlights and holds a calm solid white backlight. Resumes seamlessly as soon as typing resumes or after a 1.2s pause.
-5. **Multi-Scale Context Training Engine (`train.py`):** Trains character-level models across multi-scale prefix windows ($1 \le T \le 48$), with a configurable **validation split** (default 10%), per-epoch val loss reporting, CSV loss logging, a `--seed` flag for reproducibility, and a configurable `--stride`. Supports both exact analytical backpropagation with full **Adam optimizer state** (checkpointed) and educational heuristic optimization.
-6. **Exact PCB Matrix Slot Mapping (`profiles/hive75.json`):** Verified mapping of all 82 physical keys to exact hardware LED memory slots across 6 matrix rows, ensuring zero offset errors or dead switches.
-7. **Graceful Fallback & Mock Emulation:** Automatically detects physical hardware on startup; when unplugged or running in non-hardware environments, seamlessly switches to an interactive terminal-based RGB keyboard emulator.
+It watches a rolling window of typed characters, predicts the next character with a small Transformer written from scratch in NumPy, translates likely characters into physical key names, and sends RGB frames directly to the keyboard. Unpredicted keys stay white. The strongest candidate glows red; the next candidates fade through lighter reds.
 
----
+This is not a text-completion service and it does not replace what you type. It is a visible, physical experiment in how a character-level language model turns context into action.
 
-## Architecture Overview
+## Follow One Keystroke
+
+Suppose the current context is `th`:
+
+```text
+1. The input reader receives the next key event.
+2. CharTokenizer turns t and h into token IDs.
+3. TinyTransformer adds token and position embeddings.
+4. Causal attention looks at the context without seeing the future.
+5. Softmax produces one probability for every vocabulary token.
+6. The runtime keeps valid, mappable candidates and groups them by physical key.
+7. KeyboardController fills the 128-slot RGB buffer white and paints the top keys red.
+8. The HID transport sends the frame to the Kreo Hive 75.
+```
+
+The important boundary is between the model and the hardware: the model predicts characters, while `key_mapper.py` decides which physical switch represents each character. `A` and `a` therefore share one key, as do `!` and `1`.
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph Input ["1. Low-Latency Capture"]
-        User["User Keystroke"] --> Reader["Global Hook\n(pynput / Windows Hook)"]
-        Reader --> Buffer["Rolling Context Buffer\n(Last N characters)"]
-    end
-
-    subgraph Model ["2. Educational Transformer (model.py)"]
-        Buffer --> Tok["CharTokenizer"]
-        Tok --> Emb["W_emb Lookup\n[T x 128]"]
-        Tok --> Pos["W_pos Lookup\n[T x 128]"]
-        Emb --> Add["+ (Token + Position)"]
-        Pos --> Add
-        Add --> Attn["Causal Self-Attention\n(Q, K, V & Mask)"]
-        Attn --> FFN["FFN (ReLU) & Residuals"]
-        FFN --> Head["Output Head -> Logits\n[T x Vocab]"]
-        Head --> Probs["Softmax Probability Distribution"]
-    end
-
-    subgraph Output ["3. Hardware Control (hardware_controller.py)"]
-        Probs --> Filter["Top-K Filtering (k=5)"]
-        Filter --> Map["PCB Matrix Slot Translation\n(profiles/hive75.json)"]
-        Map --> Color["Hardware Palette:\n#1 Solid Red · #2-5 Soft Red\nBacklight: Full White"]
-        Color --> Driver["USB HID CMD 0x12 Stream\n(10 Hz Keepalive)"]
-        Driver --> Hardware["Kreo Hive 75 LEDs"]
-    end
+    Input["Keyboard event"] --> Reader["LowLatencyInputReader\nnormalize + debounce"]
+    Reader --> Queue["Bounded queue\nmax 128"]
+    Queue --> Context["Rolling context\nup to 48 chars"]
+    Context --> Tokenizer["CharTokenizer"]
+    Tokenizer --> Model["TinyTransformer\nNumPy causal attention"]
+    Model --> Candidates["Valid character\nprobabilities"]
+    Candidates --> Mapper["CHAR_TO_KEY\ncharacter -> switch"]
+    Mapper --> Buffer["128-slot RGB buffer\nwhite background + red ranks"]
+    Buffer --> HID["EVision HID\n64-byte reports + checksum"]
+    HID --> LEDs["Kreo Hive 75 LEDs"]
 ```
 
-```
- [User Types Anywhere in OS]
-             │
-             ▼
-   Low-Latency Global Hook (pynput / Windows Hook)
-             │
-             ▼
-   Rolling Context Buffer (e.g. ['t', 'h'])
-             │
-             ▼
-   CharTokenizer ──► Embeddings (W_emb) [T x 128]
-             │
-             ▼
-   Causal Self-Attention: Softmax((Q @ K.T) / sqrt(d) + Mask) @ V
-             │
-             ▼
-   FFN (ReLU) + Residuals ──► Logits [T x Vocab]
-             │
-             ▼
-   Top-K Softmax Probabilities (Next: 'e' 62%, 'a' 16%)
-             │
-             ▼
-  Matrix Slot Translation (Key 'e' ──► Slot Index 26)
-             │
-             ▼
-   USB HID CMD 0x12 Dynamic Frame Stream (10 Hz)
-             │
-             ▼
- [Physical Keyboard: 'E' Key Lights Up RED (#FF0000) over WHITE (#FFFFFF)]
-```
+There is one attention block, not a large multi-layer model. That is deliberate: every weight, tensor, mask, and update can be read in `model.py`.
 
----
+## What Is Inside the Model?
 
-## Mathematical Formulation
+`TinyTransformer` is a character-level causal Transformer:
 
-The model operates autoregressively on individual characters. Given an input context sequence of length $T \le 48$:
+- `W_emb` stores a learned vector for each token.
+- `W_pos` stores a learned vector for each position in the context.
+- `W_q`, `W_k`, and `W_v` build the attention queries, keys, and values.
+- The causal mask prevents position `i` from attending to positions after `i`.
+- `W_o` projects the attention result back into the hidden space.
+- `W1` and `W2` form a ReLU feed-forward block.
+- Residual connections preserve the input signal through both blocks.
+- `W_out` and `b_out` produce vocabulary logits.
+- A numerically stable softmax turns the final row into probabilities.
 
-### 1. Token Embeddings + Positional Encoding
-Each character is indexed into a learnable embedding matrix, and a learned position vector is added so the model knows *where* in the sequence each character sits:
-$$X_{tok} = W_{\text{emb}}[\text{tokens}], \quad X_{pos} = W_{\text{pos}}[0:T, :]$$
-$$X = X_{tok} + X_{pos}, \quad X \in \mathbb{R}^{T \times d}$$
-*(where $d=128$ is the hidden embedding dimension and $W_{\text{pos}} \in \mathbb{R}^{seq\_len \times d}$ is learned from scratch during training.)*
+New models use these constructor defaults:
 
-### 2. Linear Projections (Queries, Keys, Values)
-Input representations are linearly projected into Query, Key, and Value spaces:
-$$Q = X W_q, \quad K = X W_k, \quad V = X W_v$$
-where $W_q, W_k, W_v \in \mathbb{R}^{d \times d}$.
+| Setting | Default |
+|---|---:|
+| Vocabulary | 98 tokens |
+| Hidden size | 64 |
+| Context length | 48 characters |
+| Feed-forward size | 128 |
 
-### 3. Scaled Dot-Product Attention with Causal Masking
-Raw attention logits measure compatibility between token pairs:
-$$S = \frac{Q K^\top}{\sqrt{d}}$$
+The checked-in `checkpoints/model_final.npz` was trained with hidden size `128`, feed-forward size `256`, vocabulary size `98`, and context length `48`. The checkpoint loader reconstructs the saved shapes, so the runtime can use that model even though newly created models default to hidden size `64`.
 
-To ensure strictly autoregressive processing—preventing token $i$ from attending to future tokens $j > i$—we add an upper-triangular causal mask $M$:
-$$M_{ij} = \begin{cases} 0 & \text{if } j \le i \\ -\infty & \text{if } j > i \end{cases}$$
+Training supports two update styles:
 
-$$A = \text{softmax}(S + M), \quad A \in \mathbb{R}^{T \times T}$$
+- `backprop`: analytical gradients through the complete forward pass, with Adam updates and gradient clipping.
+- `heuristic`: a smaller educational update that adjusts the output head and token embeddings.
 
-### 4. Context & First Residual Connection
-Attention weights aggregate the value vectors, projected through an output weight matrix and added via a residual connection:
-$$\text{context} = A V, \quad \text{context} \in \mathbb{R}^{T \times d}$$
-$$X_1 = X + \text{context} \cdot W_o$$
-where $W_o \in \mathbb{R}^{d \times d}$.
+The model also exposes `generate()` with temperature and nucleus (`top_p`) sampling, although the live lighting path uses the next-character probability distribution directly.
 
-### 5. Feed-Forward Network & Second Residual Connection
-Non-linear feature expansion using a two-layer MLP with ReLU activation:
-$$\text{FFN}(X_1) = \text{ReLU}(X_1 W_1) W_2$$
-$$X_2 = X_1 + \text{FFN}(X_1)$$
-where $W_1 \in \mathbb{R}^{d \times 2d}$ and $W_2 \in \mathbb{R}^{2d \times d}$.
+## Why NumPy?
 
-### 6. Output Logits & Next-Character Distribution
-The final hidden state $X_2[-1]$ is projected to the vocabulary size $|\mathcal{V}|$:
-$$\text{logits} = X_2 W_{\text{out}} + b_{\text{out}}, \quad \text{logits} \in \mathbb{R}^{T \times |\mathcal{V}|}$$
-$$P(c_{\text{next}} = k) = \frac{e^{\text{logits}[-1, k]}}{\sum_{j=1}^{|\mathcal{V}|} e^{\text{logits}[-1, j]}}$$
+The point is transparency. There is no PyTorch graph hidden behind an API and no remote inference service. The project shows the whole loop:
 
-The characters corresponding to the top $K$ probabilities are illuminated directly on the physical keyboard.
-
----
-
-## Live Attention Matrix Visualization
-
-Running with the `--show-attn` flag renders a live causal attention heatmap directly in your terminal, showing which preceding letters the model is focusing on:
-
-```
---- Causal Attention Matrix ---
-        't'  'h'  'e'  ' '  'q'  'u'  'i'
-    --------------------------------------
-'t' |   @                                
-'h' |   :    @                           
-'e' |   .    =    @                      
-' ' |   .    -    +    @                 
-'q' |   .    :    -    =    @            
-'u' |   .    .    :    -    #    @       
-'i' |   .    .    .    :    =    *    @  
-
-Last Token Attention Focus:
-  't': 4.1% | 'h': 6.2% | 'e': 8.5% | ' ': 11.0% | 'q': 18.2% | 'u': 24.8% | 'i': 27.2%
-----------------------------------------
+```text
+text -> token IDs -> matrix operations -> probabilities -> physical LEDs
 ```
 
----
+That makes it useful as a learning project, a hardware experiment, and a compact place to study attention, backpropagation, checkpointing, and device control together.
 
-## Hardware Visual Spec
+For the full mathematical derivation and implementation walkthrough, read [GUIDE.md](GUIDE.md).
 
-| State | Color Code | Visual Behavior |
+## The Keyboard Layer
+
+The Kreo Hive 75 profile describes 82 mapped physical keys across six logical rows and fifteen logical columns. The controller allocates 128 RGB memory slots because the hardware address space is larger than the visible key count.
+
+`profiles/hive75.json` owns the details that must not be guessed from the keycap layout:
+
+- USB IDs: `320f:5055`, `258a:010c`, `258a:002a`, and `258a:001f`
+- EVision mode and RGB order
+- Report ID `4`
+- The verified key-to-slot mapping
+- The 128-slot RGB buffer size
+
+For the EVision interface, `hardware_controller.py` sends the 384-byte RGB buffer as 64-byte reports with up to 56 RGB payload bytes per report. Each report receives a 16-bit checksum and an acknowledgment is drained after the write. The EVision keepalive path refreshes the current frame every 100 milliseconds.
+
+The controller also supports the Linux `hidraw` feature-report path and keeps reconnection ownership in the keepalive thread, so a failed write does not try to reconnect recursively while holding the frame lock.
+
+## The Runtime Has Guardrails
+
+The live application is intentionally more than a loop around `model.forward()`:
+
+- `pynput` captures global keyboard events while a platform console reader runs in its own worker.
+- Carriage return becomes newline, terminal DEL becomes backspace, and unprintable controls are ignored.
+- A 15 ms debounce window reduces duplicate events.
+- A bounded queue prevents input capture from blocking forever during bursts.
+- Backspace removes one character; Enter clears the context.
+- The context is clamped to the model's maximum sequence length.
+- Empty, NaN, or very low-confidence predictions return the board to white.
+- Four recent WASD events or five identical repeated keys activate a temporary gaming pause.
+- After the idle timeout, red prediction highlights are cleared.
+- A lockfile prevents multiple processes from fighting over the same keyboard.
+- Closing the application restores the keyboard's default lighting mode.
+
+Because the reader uses a global keyboard hook, it can observe keystrokes in other windows, including sensitive fields. Use it only in an environment where that behavior is appropriate.
+
+## Colors Are the Interface
+
+| Rank | Color | Meaning |
 |---|---|---|
-| **Backlight (Rest)** | `#FFFFFF` | All unpredicted keys glow at 100% full brightness solid white |
-| **Rank 1 Prediction** | `#FF0000` | The highest-probability upcoming key illuminates in vivid solid red |
-| **Rank 2–5 Predictions** | `#FF3333`, `#FF5555`, `#FF7777`, `#FF9999` | Secondary predicted candidate keys illuminate in graded soft red |
-| **Application Exit** | Dynamic | Automatically sends mode restore packet (`0x01`) returning keyboard to default breathing animation |
+| Background | `#FFFFFF` | No prediction highlight |
+| 1 | `#FF0000` | Highest-ranked physical key |
+| 2 | `#FF3333` | Second-ranked key |
+| 3 | `#FF5555` | Third-ranked key |
+| 4 | `#FF7777` | Fourth-ranked key |
+| 5 | `#FF9999` | Fifth-ranked key |
 
----
+The runtime ranks physical keys, not only raw characters. If several predicted characters map to the same switch, their probabilities are combined before the key is assigned a color.
 
-## Quickstart
+## Try It Without Hardware
 
-### 1. Installation
+Install the pinned dependencies:
 
-Clone the repository and install the runtime dependencies:
-
-```bash
-git clone https://github.com/Drix10/keystroke-llm.git
-cd keystroke-llm
-
-pip install -r requirements.txt
+```powershell
+python -m pip install -r requirements.txt
 ```
 
----
+Then run the automated mock demo:
 
-### 2. Run the Live Predictive Keyboard
+```powershell
+python predict_and_light.py --mock --demo --show-probs
+```
 
-```bash
-# Launch live inference:
-python predict_and_light.py --show-probs
+The demo feeds sample text into the same queue used by live input and prints the mock LED state. To type into the mock runtime yourself:
 
-# With live attention matrix heatmap:
-python predict_and_light.py --show-probs --show-attn
-
-# Mock Mode (terminal emulation without hardware):
+```powershell
 python predict_and_light.py --mock --show-probs
 ```
 
-Type anywhere on your computer (browser, editor, terminal). The terminal displays real-time prediction probabilities and the physical switches illuminate dynamically.
+## Run the Physical Demo
 
----
+Connect the Kreo Hive 75 and start the live predictor:
 
-### 3. Hardware Test Utility
-
-Verify physical LED endpoints independently:
-
-```bash
-# Test default profile (Solid White backlight with WASD and Space in Red):
-python hardware_controller.py
-
-# Set custom per-key hex colors:
-python hardware_controller.py --key w ff0000 a ff0000 s ff0000 d ff0000
+```powershell
+python predict_and_light.py --show-probs
 ```
 
----
+Useful options:
 
-### 4. Training Custom Corpora
+```powershell
+# Print the causal attention heatmap
+python predict_and_light.py --show-probs --show-attn
 
-The model trains in about 2 minutes on CPU:
+# Show three ranked keys at half brightness
+python predict_and_light.py --top-k 3 --brightness 0.5
 
-```bash
-# Train with backprop, Adam optimizer, and 10% validation split:
+# Start with an initial context
+python predict_and_light.py --seed "The quick "
+
+# Disable the automatic WASD pause
+python predict_and_light.py --no-auto-pause-wasd
+```
+
+The default checkpoint is `checkpoints/model_final.npz`. Use `--checkpoint PATH` to load another compatible checkpoint. `--profile NAME` selects a JSON profile from `profiles/`.
+
+## Train It Again
+
+`train.py` builds overlapping character windows from a text file. An input window contains `seq_len` characters; the target window is the same text shifted one character forward. Backpropagation trains every position in the window at once.
+
+```powershell
+# Analytical backpropagation, Adam, and a reproducible seed
 python train.py --data data/sample_training_text.txt --epochs 15 --lr 0.003 --mode backprop --seed 42
 
-# Resume from a checkpoint (Adam state is preserved — no bias-correction spike):
-python train.py --data data/sample_training_text.txt --epochs 5 --resume checkpoints/model_final.npz
+# Resume weights and Adam state from a compatible checkpoint
+python train.py --resume checkpoints/model_final.npz --epochs 5
 
-# Custom stride and validation fraction:
-python train.py --data data/sample_training_text.txt --stride 2 --val-split 0.15
+# More overlapping windows and a larger validation holdout
+python train.py --stride 1 --val-split 0.15
 
-# Weights + Adam state saved to checkpoints/model_final.npz
+# Educational heuristic update
+python train.py --mode heuristic
 ```
 
-> **Tip:** Loss logs are written to `checkpoints/loss_log.csv` every epoch, so you can plot train vs val loss over time.
+Defaults are 15 epochs, learning rate `0.003`, context length `48`, hidden size `64`, stride `3`, backpropagation mode, and a `10%` validation split. Training writes `checkpoints/loss_log.csv`, periodic epoch checkpoints, and `checkpoints/model_final.npz`.
 
----
+## Test the Hardware Layer
 
-## Edge Cases Handled
+The hardware utility can run against the mock controller:
 
-| Scenario | Handling Mechanism |
+```powershell
+python hardware_controller.py --mock
+python hardware_controller.py --mock --key w ff0000 space 00ff00
+python hardware_controller.py --mock --color 202020 --brightness 0.5
+```
+
+Run the test suite from the repository root:
+
+```powershell
+python -m unittest test_suite.py
+```
+
+The tests cover model forward passes and checkpoint round trips, tokenizer and key mapping, RGB buffers, input normalization and debouncing, dataset creation, attention rendering, and predictive app lifecycle behavior.
+
+## Repository Map
+
+| Path | Role |
 |---|---|
-| **USB Pipe Buffer Saturation** | EVision V2 firmware returns 64-byte ACK packets on write. Reading and draining the ACK report (`hid_device.read(64, 20)`) prevents USB pipe overflow and write latency spikes. |
-| **Gaming Movement (WASD Spam)** | Gaming movement inputs (WASD streak >= 4 or repeats >= 5) are auto-detected, pausing red predictive highlights and keeping the board in calm white backlight until typing resumes. |
-| **Debounce Cache Growth** | `_last_key_time` in input reader is hard-capped at 256 entries and pruned to the 128 most recent timestamps, bounding memory usage. |
-| **USB Disconnect / Firmware Reset** | `hardware_controller.py` catches `EIO` / `ENODEV` and marks the device disconnected. The keepalive thread is the sole owner of reconnection, eliminating lock-race between `_flush_frame` and the reconnect path. |
-| **Firmware Watchdog Timeout** | Continuous 10 Hz keepalive stream (`CMD 0x12`) prevents keyboard MCU from dropping back to stock animations. |
-| **Typing Faster than Inference** | Asynchronous input capture queues keystrokes in a background thread; worker drains all pending strokes before predicting, achieving sub-2ms inference with negligible typing lag under typical typing rates while dropping excess events via `queue.Full` if the bounded queue overflows. |
-| **Non-Keyboard Characters / Symbols** | Unmapped or multi-byte unicode characters are cleanly encoded as `<unk>` tokens without throwing exceptions or corrupting matrix buffers. |
-| **High Prediction Ambiguity** | If maximum prediction probability is $< 2\%$, prediction lights are gracefully cleared to prevent erratic LED flicker. |
-| **Multiple Process Conflicts** | Single-instance lockfile (`keystroke_llm.lock`) prevents multiple processes from contending for the USB endpoint. |
-| **Keepalive Disabled** | Setting `keepalive_hz=0` truly disables keepalive pings (not a fallback to 1 Hz). The thread still wakes every second to check for the stop event. |
-| **Custom Vocab Missing `<unk>`** | `CharTokenizer` now raises a clear `ValueError` immediately if the provided vocab does not include a `<unk>` token, preventing silent index-0 fallbacks. |
-| **Adam Optimizer Reset on Resume** | `save_checkpoint` now persists the full Adam state (`adam_step`, `m/v` tensors for every parameter). On `--resume`, the optimizer continues exactly where it left off — no bias-correction spike. |
-| **Gradient into Masked Positions** | The softmax backward pass now uses a pre-computed boolean `causal_mask_bool` to zero out masked gradients, eliminating the fragile `<= -1e8` float comparison. |
-| **Vectorized Softmax Gradient** | Vectorized row-sum broadcast in causal attention backward pass replaces Python row loops, speeding up backpropagation 15x on host CPU. |
+| `model.py` | NumPy Transformer, generation, training steps, and checkpoints |
+| `train.py` | Sliding-window dataset, training loop, validation, and loss logging |
+| `key_mapper.py` | Vocabulary, tokenizer, and character-to-key translation |
+| `predict_and_light.py` | Input capture, context state, prediction ranking, and lighting orchestration |
+| `hardware_controller.py` | HID connection, RGB buffers, checksums, keepalive, reconnect, and mock output |
+| `profiles/hive75.json` | Kreo Hive 75 USB identity, protocol, and LED slots |
+| `data/sample_training_text.txt` | Example training corpus |
+| `checkpoints/` | Saved model weights and training logs |
+| `test_suite.py` | Portable `unittest` coverage |
+| `DemoVideo.mp4` | Recorded hardware demonstration |
+| `GUIDE.md` | Full architecture and implementation walkthrough |
 
----
+## Limitations Worth Knowing
 
-## Repository Layout
+This is a small character model trained on a local corpus. It can learn useful local patterns, but it does not have the world knowledge, vocabulary, or reliability of a large language model. Predictions can be strange, especially with little context or a small training set.
 
-```text
-keystroke-llm/
-├── predict_and_light.py         # Main runtime (global hook -> inference -> USB stream)
-├── hardware_controller.py       # Kreo Hive 75 USB HID controller (EVision CMD 0x12)
-├── model.py                     # Zero-dependency NumPy Causal Transformer (+ positional embeddings)
-├── train.py                     # Training loop, validation split, CSV logging, Adam checkpointing
-├── key_mapper.py                # Character tokenization and physical slot translation
-├── test_suite.py                # 14-test portable unittest suite (run: python test_suite.py)
-├── requirements.txt             # Pinned runtime deps (hidapi, pynput, numpy)
-├── GUIDE.md                     # Deep-dive beginner-friendly guide to the full system
-├── profiles/                    # Keyboard geometry & slot mappings
-│   └── hive75.json              # Kreo Hive 75 matrix configuration (hive65 intentionally excluded)
-├── data/                        # Training corpora
-│   └── sample_training_text.txt # Multi-domain English & code training data (~207K chars, 28 domains)
-└── checkpoints/                 # Model weight matrices
-    ├── model_final.npz          # Trained checkpoint (weights + full Adam state)
-    ├── loss_log.csv             # Per-epoch train & val loss log (written during training)
-    └── README.md                # Matrix parameter documentation
-```
-
----
-
-## Technical Specifications
-
-- **Target Keyboard:** Kreo Hive 75 (`VID: 0x320F`, `PID: 0x5055`, Usage Page `0xFF1C`).
-- **Model Dimensions:** Context Length $T=48$, Embedding Dimension $d=128$, Positional Embedding $W_{pos} \in \mathbb{R}^{48 \times 128}$, Feed-Forward Hidden $2d=256$, Vocabulary $|\mathcal{V}|=98$. Weights Xavier-initialized.
-- **Optimizer:** Adam ($\beta_1=0.9$, $\beta_2=0.999$, $\varepsilon=10^{-8}$, default lr `0.001`). Full optimizer state is checkpointed and restored on `--resume`.
-- **USB Protocol:** EVision V2, Report ID `0x04`, 64-byte output reports with 16-bit sum checksum (`buf[1] = sum & 0xFF`, `buf[2] = sum >> 8`).
-- **Update Frequency:** 10 Hz continuous dynamic frame transmission (`CMD 0x12`), well within hardware PWM tolerances.
-- **Inference Latency:** $< 2.0\text{ ms}$ on modern x86/ARM CPUs in single-threaded pure NumPy.
-- **Privacy Note:** The input reader uses a global OS-level keystroke hook (`pynput`) that fires across **all** windows — including password fields and secure inputs. Run only in trusted environments.
-
----
+The project currently targets the Kreo Hive 75 profile. Other keyboards need their own verified profile rather than a guessed row or column layout. HID permissions, global keyboard-hook permissions, and driver behavior also vary across operating systems.
 
 ## License
 
-MIT License. Open-source and built for transparent hardware experimentation.
+MIT License. Built for transparent hardware experimentation and learning.

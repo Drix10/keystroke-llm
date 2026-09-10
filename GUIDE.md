@@ -31,7 +31,7 @@
    - [6.2 Line-by-Line Code Walkthrough](#62-line-by-line-code-walkthrough)
 7. [Module 4: Keyboard Geometry & Physical Profiles (`profiles/hive75.json`)](#7-module-4-keyboard-geometry--physical-profiles-profileshive75json)
    - [7.1 The 75% Compact Layout Anatomy](#71-the-75-compact-layout-anatomy)
-   - [7.2 PCB Matrix Architecture: The 16x8 Column-Interleaved Matrix](#72-pcb-matrix-architecture-the-16x8-column-interleaved-matrix)
+   - [7.2 PCB Matrix Architecture: The 15x6 Profile Grid](#72-pcb-matrix-architecture-the-15x6-profile-grid)
    - [7.3 Verified Physical Hardware Slot Mapping Table](#73-verified-physical-hardware-slot-mapping-table)
 8. [Module 5: Deterministic Hardware USB HID Controller (`hardware_controller.py`)](#8-module-5-deterministic-hardware-usb-hid-controller-hardware_controllerpy)
    - [8.1 EVision V2 USB Protocol Deep Dive](#81-evision-v2-usb-protocol-deep-dive)
@@ -94,7 +94,7 @@ So before we can do any math or machine learning, our first job is to turn chara
 Vocabulary List:
 '<unk>' (unknown) -> 0
 ' '     (space)   -> 1
-'a'               -> 2
+'a'               -> 14
 'b'               -> 3
 'c'               -> 4
 ...
@@ -103,7 +103,7 @@ Vocabulary List:
 
 This list is called our **Vocabulary** (`vocab`).
 Every word you type becomes a clean sequence of numbers:
-- `"cat"` becomes `[4, 2, 21]` (representing `'c'`, `'a'`, `'t'`).
+- `"cat"` becomes `[16, 14, 33]` (representing `'c'`, `'a'`, `'t'`).
 
 ---
 
@@ -125,7 +125,7 @@ Once we turn letters into numbers, we train the computer with a simple guessing 
 
 Think of the model as a clear box with a few mathematical tables (these tables are called **weights** or parameters):
 
-1. **Embedding**: Each character gets its own private row of numbers (a vector). Instead of just being "character #2", the letter `'a'` becomes a 64-number feature vector that captures how it is used in text.
+1. **Embedding**: Each character gets its own private row of numbers (a vector). Instead of just being "character #2", the letter `'a'` becomes a learned hidden-size feature vector that captures how it is used in text. New models default to 64 values; the checked-in final checkpoint uses 128.
 2. **Self-Attention**: The heart of the transformer! When guessing the next letter, the model doesn't just look at the very last key; it looks back across the entire history of recent letters and decides **which ones matter most**. For instance, if you typed `q-u-i-c-k`, the model pays attention to `q` and `u` to know you are in the middle of a word.
 3. **Feed-Forward Layers**: Extra calculations that mix and combine the clues so the model can learn nuanced patterns.
 4. **Final Output Projection**: Converts the internal numbers into percentage scores for every key on your keyboard. The key with the highest score is the #1 prediction!
@@ -138,9 +138,9 @@ Commercial AI models like GPT-4 contain hundreds of billions of numbers, require
 
 This project is built from scratch with zero heavy dependencies:
 - **Zero PyTorch or TensorFlow**: Written entirely in pure Python and NumPy.
-- **Sub-Millisecond Speed**: Runs a complete forward prediction in **0.044 milliseconds** (~44 microseconds) on any ordinary laptop CPU.
+- **Small and inspectable**: Runs the complete inference path with NumPy arrays and keeps every intermediate attention tensor available for inspection.
 - **100% Transparent**: You can print out the entire attention matrix and watch the model's brain think.
-- **Instant Training**: Trains on a whole text file in less than 60 seconds.
+- **Small training loop**: Trains directly from a text file and reports train and validation loss after every epoch.
 
 ---
 
@@ -172,7 +172,7 @@ Now imagine playing that game at 100 words per minute, one letter at a time, whe
 
 When you launch `python predict_and_light.py --show-probs`:
 1. The keyboard starts with a clean, 100% white backlight.
-2. As soon as you type your first letter, the model evaluates context in $< 0.1\text{ ms}$.
+2. As soon as you type your first letter, the model evaluates the current context and ranks valid next-key candidates.
 3. The next probable keys immediately illuminate in red.
 4. If you pause typing, the keyboard gracefully dims back to solid white.
 5. If you make a typo and press Backspace, the model unwinds its context and instantly recalculates.
@@ -202,7 +202,7 @@ Keystroke-LLM transforms your physical mechanical keyboard into an active extens
 +---------------------------------------------------------------------------------------+
 |                             TINY TRANSFORMER NEURAL ENGINE                            |
 |       - Single-layer Causal Self-Attention written from scratch in pure NumPy         |
-|       - Sub-millisecond forward inference: Softmax probability distribution           |
+|       - NumPy forward inference: Softmax probability distribution                      |
 +---------------------------------------------------------------------------------------+
                                            |
                                            v
@@ -216,14 +216,14 @@ Keystroke-LLM transforms your physical mechanical keyboard into an active extens
                                            v
 +---------------------------------------------------------------------------------------+
 |                             PHYSICAL MATRIX SLOT MAPPING                              |
-|       - Maps character tokens to Kreo Hive 75 physical LED indices (16x8 matrix)        |
+|       - Maps character tokens to Kreo Hive 75 physical LED slots                       |
 +---------------------------------------------------------------------------------------+
                                            |
                                            v
 +---------------------------------------------------------------------------------------+
 |                                USB HID PROTOCOL STREAMING                             |
 |       - Native EVision V2 Vendor Interface (Usage Page 0xFF1C, Report ID 0x04)        |
-|       - 64-byte chunks, 16-bit sum checksum, 10 Hz keepalive stream                   |
+|       - EVision 64-byte chunks, checksums, ACK draining, and 10 Hz keepalive           |
 +---------------------------------------------------------------------------------------+
                                            |
                                            v
@@ -234,9 +234,9 @@ Keystroke-LLM transforms your physical mechanical keyboard into an active extens
 ```
 
 ### Core Design Principles
-1. **Zero External Machine Learning Dependencies**: The neural network is written in pure NumPy. No PyTorch, no TensorFlow, no CUDA runtimes. It runs instantly on any CPU in less than 0.4 ms.
+1. **Zero External Machine Learning Dependencies**: The neural network is written in pure NumPy. No PyTorch, no TensorFlow, no CUDA runtimes.
 2. **Deterministic Hardware Protocol**: Rather than relying on heavyweight GUI lighting suites that introduce hundreds of milliseconds of lag, this project speaks the native vendor USB HID protocol directly over raw OS endpoints.
-3. **Sub-10ms End-to-End Latency**: From the instant a physical key switch registers to the instant the next predicted switches illuminate in red, the entire pipeline executes in under 10 milliseconds.
+3. **Bounded, asynchronous runtime**: Input capture, prediction, and USB updates are separated so a slow device or a burst of typing does not block the input callback indefinitely. Actual latency depends on the operating system, NumPy, HID driver, and hardware.
 
 ---
 
@@ -282,9 +282,9 @@ sequenceDiagram
 
 Let:
 - $V$: Vocabulary size ($V = 98$, encompassing uppercase, lowercase, numbers, and symbols).
-- $d_{model}$: Hidden dimension ($d_{model} = 128$).
+- $d_{model}$: Hidden dimension. A newly created model defaults to $64$; the checked-in `model_final.npz` was trained with $128$.
 - $T$: Context sequence length ($1 \le T \le seq\_len$, default $seq\_len = 48$).
-- $d_{ff}$: Feed-forward hidden dimension ($d_{ff} = 2 \times d_{model} = 256$).
+- $d_{ff}$: Feed-forward hidden dimension ($d_{ff} = 2 \times d_{model}$). It is $128$ for a new default model and $256$ in the checked-in final checkpoint.
 
 #### Tensor Dimensions Across the Forward Pass
 
@@ -318,17 +318,17 @@ Input Tokens:   ['t', 'h', 'e', ' ']
                   |    |    |    |
                   v    v    v    v
             +-----------------------+
-            |  Embedding Layer      |  -> Matrix X [4 x 128]
+            |  Embedding Layer      |  -> Matrix X [4 x d_model]
             +-----------------------+
                   |         |
          +--------+         +--------+
          v                           v
    Query = X * W_q              Key = X * W_k
-     [4 x 128]                    [4 x 128]
+   [4 x d_model]                [4 x d_model]
          \                           /
           \                         /
            v                       v
-          Attention Scores S = (Q * K^T) / sqrt(128)  [4 x 4]
+          Attention Scores S = (Q * K^T) / sqrt(d_model)  [4 x 4]
                              |
                              v
                Apply Causal Mask (Upper Triangle = -1e9)
@@ -342,17 +342,17 @@ Input Tokens:   ['t', 'h', 'e', ' ']
                Row-wise Softmax -> Weights A [4 x 4]
                              |
                              v
-             Multiply by Values V = X * W_v [4 x 128]
+             Multiply by Values V = X * W_v [4 x d_model]
                              |
                              v
-             Aggregated Context C = A * V   [4 x 128]
+             Aggregated Context C = A * V   [4 x d_model]
 ```
 
 ---
 
 ### 4.3 Line-by-Line Code Walkthrough
 
-#### Mathematical Primitives (`model.py` Lines 6–43)
+#### Mathematical Primitives (`model.py`)
 ```python
 def randn(rows: int, cols: int, scale: float = 0.1) -> np.ndarray:
     return np.random.uniform(-scale, scale, size=(rows, cols)).astype(np.float64)
@@ -437,7 +437,7 @@ The cross-entropy loss for target token $y \in \{0, \dots, V-1\}$ is:
 $$\mathcal{L} = -\log P(y) = -\log \left( \frac{e^{z_y}}{\sum_{j=0}^{V-1} e^{z_j}} \right)$$
 Differentiating with respect to the output logit $z_k$:
 $$\frac{\partial \mathcal{L}}{\partial z_k} = P(k) - \mathbb{I}(k = y)$$
-In code (`model.py` lines 174–176):
+In `train_step_backprop()`:
 ```python
 d_logits = np.zeros_like(c["logits"])
 d_logits[-1, :] = probs.copy()
@@ -467,7 +467,7 @@ Since $C = A \cdot V$:
 $$\frac{\partial \mathcal{L}}{\partial V} = A^T \cdot \frac{\partial \mathcal{L}}{\partial C}, \quad \frac{\partial \mathcal{L}}{\partial A} = \frac{\partial \mathcal{L}}{\partial C} \cdot V^T$$
 Differentiating the row-wise softmax $A_{i,:} = \text{softmax}(S_{i,:})$:
 $$\frac{\partial \mathcal{L}}{\partial S_{i,j}} = A_{i,j} \left( \frac{\partial \mathcal{L}}{\partial A_{i,j}} - \sum_{k=1}^T \frac{\partial \mathcal{L}}{\partial A_{i,k}} A_{i,k} \right)$$
-In code, this is evaluated using a fully vectorized row-sum broadcast rather than a Python row loop, yielding a ~15x speedup per step:
+In code, this is evaluated using a fully vectorized row-sum broadcast rather than a Python row loop:
 ```python
 sum_da_s = np.sum(d_attn_weights * c["attn_weights"], axis=-1, keepdims=True)
 d_masked = c["attn_weights"] * (d_attn_weights - sum_da_s)
@@ -510,15 +510,15 @@ Every sample allows the causal attention mask to train prefix lengths $1, 2, \do
 
 ### 5.2 Line-by-Line Code Walkthrough
 
-1. **`build_sliding_window_dataset(text, tokenizer, seq_len, stride=3)`** (Lines 12–20):
+1. **`build_sliding_window_dataset(text, tokenizer, seq_len, stride=3)`**:
    - Encodes raw text into character IDs using `tokenizer.encode(text)`.
    - Slices input sequence `token_ids[i : i + seq_len]` and offset target sequence `token_ids[i + 1 : i + seq_len + 1]`.
    - The `--stride` parameter controls how many characters the window shifts between samples (default: 3).
-2. **`compute_val_loss(model, val_dataset)`** (Lines 39–51):
+2. **`compute_val_loss(model, val_dataset)`**:
    - Forward-only evaluation on the held-out validation dataset without updating gradients.
    - Computes multi-position cross-entropy loss to track true generalization and detect overfitting.
-3. **`train()`** (Lines 53–140):
-   - **CLI Flags**: `--data`, `--epochs`, `--lr` (default `0.001`), `--seq-len` (default `48`), `--hidden-size` (default `128`), `--stride` (default `3`), `--mode` (`backprop` or `heuristic`), `--checkpoint-dir`, `--resume`, `--seed`, `--val-split` (default `0.10` / 10%).
+3. **`train()`**:
+   - **CLI Flags**: `--data`, `--epochs`, `--lr` (default `0.003`), `--seq-len` (default `48`), `--hidden-size` (default `64`), `--stride` (default `3`), `--mode` (`backprop` or `heuristic`), `--checkpoint-dir`, `--resume`, `--seed`, `--val-split` (default `0.10` / 10%).
    - **Reproducibility**: If `--seed` is passed, runs `np.random.seed(args.seed)` to ensure deterministic data shuffling and weight initialization.
    - **Validation Split**: Automatically partitions the dataset into training samples and a held-out temporal validation split (e.g. 90% train / 10% validation).
    - **CSV Logging**: Automatically logs `epoch`, `train_loss`, `val_loss`, and `time_s` to `checkpoints/loss_log.csv` after every epoch.
@@ -566,25 +566,26 @@ CHAR_TO_KEY = {
 
 ### 7.1 The 75% Compact Layout Anatomy
 
-The **Kreo Hive 75** is an 82-key physical layout:
-- **Row 0 (Function Row)**: 15 switches (`Esc`, `F1`–`F12`, `PrtSc`, `Del`). No physical spacing between `Esc` and `F1`.
-- **Row 1 (Number Row)**: 15 switches (`` ` ``, `1`–`0`, `-`, `=`, `Backspace`, `Home`).
-- **Row 2 (Upper Row)**: 15 switches (`Tab`, `Q`–`P`, `[`, `]`, `\`, `PgUp`).
-- **Row 3 (Home Row)**: 14 switches (`CapsLock`, `A`–`L`, `;`, `'`, `Enter`, `PgDn`).
-- **Row 4 (Bottom Alpha Row)**: 14 switches (`LShift`, `Z`–`M`, `,`, `.`, `/`, `RShift`, `Up`, `End`).
-- **Row 5 (Modifier Row)**: 10 switches (`LCtrl`, `Win`, `LAlt`, `Space`, `RAlt`, `Fn`, `RCtrl`, `Left`, `Down`, `Right`).
+The **Kreo Hive 75** profile contains 82 mapped physical keys arranged in six logical rows and fifteen logical columns. The rows are not all full: some positions are empty because the visible keyboard layout is compact.
+
+- **Row 0**: `Esc`, `F1`-`F12`, and `Del`.
+- **Row 1**: grave, number keys, `-`, `=`, `Backspace`, and `Ins`.
+- **Row 2**: `Tab`, `Q`-`P`, brackets, backslash, and `End`.
+- **Row 3**: `CapsLock`, `A`-`L`, semicolon, quote, `Enter`, and `PgUp`.
+- **Row 4**: left Shift, `Z`-`M`, comma, period, slash, right Shift, `Up`, and `PgDn`.
+- **Row 5**: left Ctrl, Win, left Alt, Space, right Alt, Fn, right Ctrl, and the arrow keys.
 
 ```
 +----+  +----+----+----+----+----+----+----+----+----+----+----+----+  +----+----+
-|Esc |  | F1 | F2 | F3 | F4 | F5 | F6 | F7 | F8 | F9 |F10 |F11 |F12 |  |Prt |Del |
+|Esc |  | F1 | F2 | F3 | F4 | F5 | F6 | F7 | F8 | F9 |F10 |F11 |F12 |  |   |Del |
 +----+  +----+----+----+----+----+----+----+----+----+----+----+----+  +----+----+
-| `~ | 1! | 2@ | 3# | 4$ | 5% | 6^ | 7& | 8* | 9( | 0) | -_ | =+ | Back |  |Home|
+| `~ | 1! | 2@ | 3# | 4$ | 5% | 6^ | 7& | 8* | 9( | 0) | -_ | =+ | Back |  | Ins|
 +----+----+----+----+----+----+----+----+----+----+----+----+----+------+  +----+
-| Tab  | Q  | W  | E  | R  | T  | Y  | U  | I  | O  | P  | [{ | ]} | \| |  |PgUp|
+| Tab  | Q  | W  | E  | R  | T  | Y  | U  | I  | O  | P  | [{ | ]} | \| |  |End |
 +------+----+----+----+----+----+----+----+----+----+----+----+----+----+  +----+
-| Caps  | A  | S  | D  | F  | G  | H  | J  | K  | L  | ;: | '" | Enter  |  |PgDn|
+| Caps  | A  | S  | D  | F  | G  | H  | J  | K  | L  | ;: | '" | Enter  |  |PgUp|
 +-------+----+----+----+----+----+----+----+----+----+----+----+--------+  +----+
-| Shift   | Z  | X  | C  | V  | B  | N  | M  | ,< | .> | /? | Shift |Up|  |End |
+| Shift   | Z  | X  | C  | V  | B  | N  | M  | ,< | .> | /? | Shift |Up|  |PgDn|
 +---------+----+----+----+----+----+----+----+----+----+-----+----+---+--+  +----+
 | Ctrl| Win| Alt|           Space           | Alt| Fn | Ctrl|Left|Dn |Rt |
 +-----+----+----+---------------------------+----+----+-----+----+---+----+
@@ -592,30 +593,25 @@ The **Kreo Hive 75** is an 82-key physical layout:
 
 ---
 
-### 7.2 PCB Matrix Architecture: The 16x8 Column-Interleaved Matrix
+### 7.2 PCB Matrix Architecture: The 15x6 Profile Grid
 
 During hardware reverse-engineering of the Kreo Hive 75 EVision V2 controller, generic OpenRGB and 104-key drivers produced vertical column shifts because full-size keyboards space function keys differently and route PCB traces in simple row orders.
 
-Direct USB hardware probing revealed that the Kreo Hive 75 addresses LEDs via an internal **16-column by 8-row memory matrix** ($16 	imes 8 = 128$ addressable slots):
+The profile describes a **15-column by 6-row logical grid**. The controller still allocates 128 RGB slots, so the visible keys occupy only some of the available addresses. The slot formula used by the profile is:
 
-$$	ext{slot} = (	ext{col} 	imes 8) + 	ext{row}$$
+$$\text{slot} = (\text{col} \times 8) + \text{row}$$
 
 ```
-        Col 0   Col 1   Col 2   Col 3   Col 4   Col 5   Col 6   Col 7 ... Col 15
-Row 0:   Esc     F1      F2      F3      F4      F5      F6      F7        Del
-Row 1:   `~      1       2       3       4       5       6       7         Home
-Row 2:   Tab     Q       W       E       R       T       Y       U         PgUp
-Row 3:   Caps    A       S       D       F       G       H       J         PgDn
-Row 4:   LShift  Z       X       C       --      V       B       N         End
-Row 5:   LCtrl   Win     Alt     --      --      --    Space     --        Right
+      Col 0   Col 1   Col 2   Col 3   Col 4   Col 5   Col 6 ... Col 14
+   Row 0:   Esc     F1      F2      F3      F4      F5      F6  ... Del
+   Row 1:   `~      1       2       3       4       5       6   ... Ins
+   Row 2:   Tab     Q       W       E       R       T       Y   ... End
+   Row 3:   Caps    A       S       D       F       G       H   ... PgUp
+   Row 4:   LShift  Z       X       C       V       B       N   ... PgDn
+   Row 5:   LCtrl   Win     Alt     --      --      Space     --  ... Right
 ```
 
-Every standard switch follows this exact formula. The bottom alpha row (ZXCV) features physical trace routing jumps calibrated in `profiles/hive75.json`:
-- `V = 44` (Col 5, Row 4)
-- `B = 52` (Col 6, Row 4)
-- `N = 60` (Col 7, Row 4)
-- `M = 68` (Col 8, Row 4)
-- `Space = 53` (Col 6, Row 5)
+The JSON file is the source of truth for empty positions and hardware-specific slots. For example, `w` is at slot 18, `v` at slot 44, `space` at slot 45, and `right` at slot 121. Do not infer a slot from the visible key order.
 
 ---
 
@@ -623,24 +619,14 @@ Every standard switch follows this exact formula. The bottom alpha row (ZXCV) fe
 
 Below is the verified hardware slot mapping implemented in [`profiles/hive75.json`](profiles/hive75.json):
 
-| Matrix Column | Row 0 (Function) | Row 1 (Numbers) | Row 2 (QWERTY) | Row 3 (ASDF) | Row 4 (ZXCV) | Row 5 (Modifiers) |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Col 0** | `esc`: 0 | `` ` ``: 1 | `tab`: 2 | `capslock`: 3 | `lshift`: 4 | `lctrl`: 5 |
-| **Col 1** | `f1`: 8 | `1`: 9 | `q`: 10 | `a`: 11 | `z`: 12 | `win`: 13 |
-| **Col 2** | `f2`: 16 | `2`: 17 | `w`: 18 | `s`: 19 | `x`: 20 | `lalt`: 21 |
-| **Col 3** | `f3`: 24 | `3`: 25 | `e`: 26 | `d`: 27 | `c`: 28 | -- |
-| **Col 4** | `f4`: 32 | `4`: 33 | `r`: 34 | `f`: 35 | -- | -- |
-| **Col 5** | `f5`: 40 | `5`: 41 | `t`: 42 | `g`: 43 | `v`: 44 | -- |
-| **Col 6** | `f6`: 48 | `6`: 49 | `y`: 50 | `h`: 51 | `b`: 52 | `space`: 53 |
-| **Col 7** | `f7`: 56 | `7`: 57 | `u`: 58 | `j`: 59 | `n`: 60 | -- |
-| **Col 8** | `f8`: 64 | `8`: 65 | `i`: 66 | `k`: 67 | `m`: 68 | -- |
-| **Col 9** | `f9`: 72 | `9`: 73 | `o`: 74 | `l`: 75 | `comma`: 76 | -- |
-| **Col 10** | `f10`: 80 | `0`: 81 | `p`: 82 | `semicolon`: 83 | `period`: 84 | `ralt`: 85 |
-| **Col 11** | `f11`: 88 | `minus`: 89 | `lbracket`: 90 | `quote`: 91 | `slash`: 92 | `fn`: 93 |
-| **Col 12** | `f12`: 96 | `equal`: 97 | `rbracket`: 98 | -- | `rshift`: 100 | `rctrl`: 101 |
-| **Col 13** | `printscreen`: 104 | `backspace`: 105 | `backslash`: 106 | `enter`: 107 | `up`: 108 | `left`: 109 |
-| **Col 14** | -- | -- | -- | -- | -- | `down`: 117 |
-| **Col 15** | `del`: 120 | `home`: 121 | `pgup`: 122 | `pgdn`: 123 | `end`: 124 | `right`: 125 |
+| Matrix row | Keys and slots |
+| :--- | :--- |
+| **0** | `esc`: 0, `f1`: 8, `f2`: 16, `f3`: 24, `f4`: 32, `f5`: 40, `f6`: 48, `f7`: 56, `f8`: 64, `f9`: 72, `f10`: 80, `f11`: 88, `f12`: 96, `del`: 112 |
+| **1** | `grave`: 1, `1`: 9, `2`: 17, `3`: 25, `4`: 33, `5`: 41, `6`: 49, `7`: 57, `8`: 65, `9`: 73, `0`: 81, `minus`: 89, `equal`: 97, `backspace`: 105, `ins`: 113 |
+| **2** | `tab`: 2, `q`: 10, `w`: 18, `e`: 26, `r`: 34, `t`: 42, `y`: 50, `u`: 58, `i`: 66, `o`: 74, `p`: 82, `lbracket`: 90, `rbracket`: 98, `backslash`: 106, `end`: 114 |
+| **3** | `capslock`: 3, `a`: 11, `s`: 19, `d`: 27, `f`: 35, `g`: 43, `h`: 51, `j`: 59, `k`: 67, `l`: 75, `semicolon`: 83, `quote`: 91, `enter`: 107, `pgup`: 115 |
+| **4** | `lshift`: 12, `z`: 20, `x`: 28, `c`: 36, `v`: 44, `b`: 52, `n`: 60, `m`: 68, `comma`: 76, `period`: 84, `slash`: 92, `rshift`: 100, `up`: 118, `pgdn`: 122 |
+| **5** | `lctrl`: 5, `win`: 13, `lalt`: 21, `space`: 45, `ralt`: 77, `fn`: 85, `rctrl`: 101, `left`: 119, `down`: 120, `right`: 121 |
 
 ---
 
@@ -650,7 +636,7 @@ Below is the verified hardware slot mapping implemented in [`profiles/hive75.jso
 
 The Kreo Hive 75 operates using an EVision V2 microcontroller (`VID: 0x320F, PID: 0x5055` / `258A:010C`).
 - **Endpoint**: Vendor Usage Page `0xFF1C`, Report ID `0x04`.
-- **Packet Length**: Fixed 64 bytes.
+- **EVision report length**: 64 bytes. The profile also stores a 520-byte feature-report length for the non-EVision path.
 - **Color Format**: 3 bytes per switch: Red, Green, Blue ($0 \dots 255$).
 - **Total RGB Payload**: $128 \text{ slots} \times 3 \text{ bytes} = 384 \text{ bytes}$.
 - **Chunking**: $384 \text{ bytes}$ are divided across 7 sequential USB HID packets ($6 \times 56\text{ bytes} + 1 \times 48\text{ bytes}$).
@@ -679,48 +665,47 @@ def _compute_evision_checksum(buf: bytearray) -> bytearray:
 ```
 
 #### USB Pipe Buffer & ACK Draining
-The EVision V2 keyboard microcontroller responds to every dynamic color report with an acknowledgment report. If the host software writes frames without reading ACKs, the operating system USB endpoint buffer overflows and writes stall.
+The EVision V2 keyboard microcontroller responds to every dynamic color report with an acknowledgment report. If the host software writes frames without reading ACKs, the operating system USB endpoint buffer can overflow and writes can stall.
 `hardware_controller.py` drains the ACK report after each chunk write:
 ```python
 self.hid_device.write(list(pkt))
 if read_ack:
     self.hid_device.read(64, 20)  # Drain ACK response within 20ms timeout
 ```
-This guarantees non-blocking frame transmission with sub-2ms write times. If the checksum does not match, the keyboard's USB microcontroller rejects the packet and drops the frame.
+The read has a 20 ms timeout, and failures are handled by marking the HID handle disconnected. If the checksum does not match, the keyboard's USB microcontroller rejects the packet and drops the frame. The code does not promise a fixed end-to-end latency.
 
 ### 8.3 The 10 Hz Keepalive Watchdog Engine
 
-The EVision keyboard firmware features an internal watchdog timer. If dynamic packets (`CMD 0x12`) are not continuously streamed at a minimum rate of $10\text{ Hz}$ ($100\text{ ms}$ interval), the hardware firmware assumes host software failure and reverts to stock onboard animations (e.g. rainbow wave).
-`KeyboardController` spawns a background keepalive thread that flushes frames every $100\text{ ms}$.
+The EVision keyboard firmware features an internal watchdog timer. The controller's EVision path therefore flushes the current frame every $100\text{ ms}$ ($10\text{ Hz}$). For a non-EVision profile, the configured `keepalive_hz` controls the interval; in `hive75.json` that value is `1.0`.
 
 ---
 
 ### 8.4 Line-by-Line Code Walkthrough
 
-1. **`KeyboardProfile`** (Lines 65–111):
+1. **`KeyboardProfile`**:
    - Loads layout geometry, USB VIDs/PIDs, and assigns key slot indices.
    - Automatically populates common aliases (`ctrl` $\to$ `lctrl`, `shift` $\to$ `lshift`, `del` $\to$ `del`, `function` $\to$ `fn`, `=` $\to$ `equal`, `[` $\to$ `lbracket`).
-2. **`_acquire_lock()` & `_release_lock()`** (Lines 184–213):
+2. **`_acquire_lock()` and `_release_lock()`**:
    - Prevents multiple conflicting processes from asserting conflicting USB handles.
    - Uses `_is_pid_running(old_pid)` to clean up stale lockfiles automatically if a prior session crashed, respecting POSIX `EPERM` permissions.
-3. **`_connect_hid()`** (Lines 214–272):
+3. **`_connect_hid()`**:
    - Closes existing handles to eliminate OS resource leaks.
    - Enumerates devices, matching `0x320F:0x5055` and filtering for vendor Usage Page `0xFF1C`.
-4. **`_send_evision_frame()` & `_flush_frame()`** (Lines 321–389):
+4. **`_send_evision_frame()` and `_flush_frame()`**:
    - Slices the 384-byte buffer into 56-byte chunks.
    - Injects Command `0x12` (`EVISION_V2_CMD_SEND_DYNAMIC_COLORS`), computes checksums, and writes reports.
    - **Thread-Safe Reconnect Design**: If a write fails (e.g., unplugged keyboard), the method marks `self.hid_device = None` and exits immediately without attempting an inline reconnect. The keepalive thread owns all reconnection attempts, eliminating lock contention and deadlocks between active key updates and reconnect attempts.
-5. **`_keepalive_loop()`** (Lines 390–415):
-   - Flushes dynamic frames at 10 Hz. If `keepalive_hz == 0`, keepalive transmission is truly disabled rather than falling back to 1.0 Hz.
+5. **`_keepalive_loop()`**:
+   - Flushes EVision frames at 10 Hz. For other modes, uses `keepalive_hz`; if `keepalive_hz == 0`, keepalive transmission is disabled.
    - Every 2 seconds when disconnected, attempts to re-establish the USB handle safely under `_lock`.
-6. **`set_key_colors(key_colors, brightness, clear_others, default_background="ffffff")`** (Lines 411–449):
+6. **`set_key_colors(key_colors, brightness, clear_others, default_background="ffffff")`**:
    - **Full Buffer Fill**: When `clear_others=True`, populates all 128 slots unconditionally:
      ```python
      self.rgb_buffer = bytearray([bg_r, bg_g, bg_b] * self.profile.num_slots)
      ```
      This ensures that all 82 switches on the board glow in uniform white light with no missing keys.
    - Overwrites the target Top-K predicted keys with their respective red tones.
-7. **`close()`** (Lines 464–484):
+7. **`close()`**:
    - Signals `self._stop_event.set()` to instantly wake and join the keepalive thread without sleep latency.
    - Re-arms the keyboard's default lighting via `restore_default_mode()`, closes the HID handle, and deletes the lockfile.
 
@@ -736,7 +721,7 @@ Capturing keystrokes system-wide on modern operating systems introduces multiple
 
 `LowLatencyInputReader` combines both methods:
 1. **Engine A (Global Hook)**: Runs `pynput.keyboard.Listener` in non-blocking mode via `listener.start()`. Captures keystrokes when the user is typing across any window (web browsers, code editors, games, chat apps).
-2. **Engine B (Console Poller)**: Started conditionally as fallback if the global listener encounters errors.
+2. **Engine B (Console Poller)**: Runs alongside the global listener. On Windows it polls `msvcrt`; on POSIX systems it uses `select` and `termios`.
 3. **15ms Debounce Filter**: To prevent duplicate key ingestion when both engines detect the same physical keystroke, `_enqueue()` tracks timestamp deltas per character:
    ```python
    if (now - last_t) > 0.015:  # 15 ms debounce window
@@ -797,18 +782,18 @@ To maintain an intuitive lighting experience:
 
 ---
 
-### 9.3 Line-by-Line Code Walkthrough
+### 9.4 Line-by-Line Code Walkthrough
 
-1. **`render_attention_matrix(tokens, attn_weights)`** (Lines 27–52):
+1. **`render_attention_matrix(tokens, attn_weights)`**:
    - Dynamically slices the attention submatrix matching the input sequence length.
    - Renormalizes attention rows so they sum to 100% before displaying the ASCII attention heatmap.
-2. **`LowLatencyInputReader`** (Lines 55–192):
+2. **`LowLatencyInputReader`**:
    - `_start_capture()` initializes the non-blocking global hook.
    - `_enqueue(ch)` normalizes carriage returns (`\r` $\to$ `\n`), normalizes delete keys (`\x7f` $\to$ `\b`), intercepts Ctrl+C (`\x03`) to invoke `_thread.interrupt_main()`, filters control codes, debounces duplicate events (15ms window), and enqueues the token.
-3. **`PredictiveKeyLightsApp.run()`** (Lines 220–295):
-   - Replaces naive `time.sleep()` loops with `self.reader.key_queue.get(timeout=0.005)` for sub-millisecond wakeup latency when keys arrive.
+3. **`PredictiveKeyLightsApp.run()`**:
+   - Uses `self.key_queue.get(timeout=0.005)` so the worker can process bursts while still checking idle and gaming timers.
    - Consumes characters from `self.key_queue`, updates the rolling buffer, manages idle timeouts, and calls `_update_prediction()`.
-4. **`_update_prediction()`** (Lines 296–345):
+4. **`_update_prediction()`**:
    - Evaluates the rolling buffer through `self.model.forward()`.
    - Checks for `np.isnan` or low-confidence distributions ($< 0.02$).
    - Slices top predictions using `np.argsort(probs)[::-1][:self.top_k]`.
@@ -823,14 +808,14 @@ To maintain an intuitive lighting experience:
 | :--- | :--- | :--- |
 | **Startup Empty Context** | Model predicted on space (`" "`), lighting `F4`, `Y`, `1` in red before typing began. | If `len(rolling_buffer) == 0`, inference is bypassed and keyboard remains 100% white. |
 | **Missing Background Keys** | Background fill only looped over `slot_map.values()`. Keys like `f`, `j`, `p`, `=`, `[`, `]`, `f11`, `ctrl`, `shift`, `del` stayed dark. | Populates the entire 128-slot buffer unconditionally: `bytearray([bg_r, bg_g, bg_b] * num_slots)`. |
-| **Physical Matrix Offset** | 104-key column formula shifted letters onto function and number rows (`W` $\to$ `1`, `T` $\to$ `F4`, `H` $\to$ `Y`). | Mapped all 82 switches to verified 16x8 matrix Kreo Hive 75 row-based matrix coordinates. |
-| **Keystroke Hook Freezing** | `pynput.join()` stalled the thread, preventing non-blocking fallback from ever executing. | Spawns `pynput` with non-blocking `start()` while running console poller conditionally. |
+| **Physical Matrix Offset** | A generic 104-key column formula shifted letters onto function and number rows (`W` $\to$ `1`, `T` $\to$ `F4`, `H` $\to$ `Y`). | Mapped all 82 switches to the verified slots in `profiles/hive75.json`. |
+| **Keystroke Hook Freezing** | Waiting on a hook thread could prevent the console reader from running. | Starts `pynput` with non-blocking `start()` and runs the platform console reader in its own worker thread. |
 | **Ctrl+C Trapping** | `msvcrt.getch()` intercepted `\x03`, preventing process termination via Ctrl+C. | Intercepts byte `b'\x03'` in console poller and invokes `_thread.interrupt_main()`. |
 | **Carriage Return / DEL Corruption** | `\r` and `\x7f` treated as `<unk>` or failing to delete context on some terminals. | Normalizes `\r` to `\n` and `\x7f` to `\b` in `_enqueue()` before control filtering. |
 | **Context Length Overflow** | `--context-len` greater than model's `seq_len` caused shape assertion crash. | Clamps `context_len = min(context_len, model.seq_len)` in `__init__`, and `forward()` auto-slices long sequences. |
 | **Attention Shape & Renormalization** | Slicing submatrix without row-sum normalization produced sums $< 100\%$. | Dynamically aligns slice and renormalizes rows with `np.divide()` so rows sum to 100%. |
 | **Stale Lockfiles & POSIX EPERM** | Active processes owned by other users raised `PermissionError`, mistakenly treated as absent. | `_is_pid_running()` returns `True` on `PermissionError` and `errno.EPERM`, preserving valid locks. |
-| **Keepalive USB Lock Contention** | Repeated 20ms ACK timeouts on dynamic frames starved `set_key_colors` of `_lock`. | Streaming dynamic colors (`CMD 0x12`) does not require ACKs; non-blocking writes take $< 2.1\text{ ms}$. |
+| **Keepalive USB Lock Contention** | Frame writes and reconnects could compete for the controller lock. | `_flush_frame()` marks failed handles disconnected; the keepalive thread owns reconnection, and EVision writes drain their ACK reports. |
 | **Late Keyboard Reconnection** | Startup failure marked `self.mock = True`, permanently disabling reconnect attempts. | Retains `self.mock = False` on transport failures; background thread auto-reconnects when plugged in. |
 | **Reconnect Lock-Race** | `_flush_frame` calling `_connect_hid()` while holding `_lock` raced with keepalive thread reconnect. | `_flush_frame` only sets device to `None`; keepalive thread is the sole owner of reconnection. |
 | **Keepalive Disabled Semantics** | Setting `keepalive_hz=0` defaulted back to 1.0 Hz instead of actually turning off pings. | When `keepalive_hz == 0`, dynamic frame pings are truly disabled, checking only for stop event. |
