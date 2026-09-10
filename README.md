@@ -23,17 +23,21 @@ Keystroke-LLM pairs an educational character-level Causal Transformer written in
 ## 🎬 Live Hardware Demo & Video
 
 <p align="center">
+  <video src="DemoVideo.mp4" controls="controls" muted="muted" width="100%" poster="demo_poster.png">
+    <a href="DemoVideo.mp4">
+      <img src="demo_poster.png" alt="Keystroke-LLM Hardware Demo" width="100%" />
+    </a>
+  </video>
+</p>
+
+<p align="center">
   <a href="https://www.linkedin.com/posts/drix10_llm-ondeviceai-mechanicalkeyboards-activity-7503825549148975105-CW31" target="_blank">
-    <img src="https://img.shields.io/badge/LinkedIn-Watch%20Live%20Hardware%20Demo%20Video-0077B5?style=for-the-badge&logo=linkedin&logoColor=white" alt="Watch Live Demo on LinkedIn" />
+    <img src="https://img.shields.io/badge/LinkedIn-Join%20the%20Discussion%20%26%20Post-0077B5?style=for-the-badge&logo=linkedin&logoColor=white" alt="LinkedIn Post & Discussion" />
   </a>
 </p>
 
-> 🎥 **See the keyboard in action:** Watch the full working hardware demonstration video and engineering discussion on LinkedIn:  
-> 🔗 **[Watch the Live Hardware Demo on LinkedIn](https://www.linkedin.com/posts/drix10_llm-ondeviceai-mechanicalkeyboards-activity-7503825549148975105-CW31)** *(Direct Post Shortlink: [lnkd.in/p/gipWJfmn](https://lnkd.in/p/gipWJfmn))*
-
-<p align="center">
-  <iframe src="https://www.linkedin.com/embed/feed/update/urn:li:activity:7503825549148975105" height="600" width="504" frameborder="0" allowfullscreen="" title="Embedded LinkedIn Post & Video"></iframe>
-</p>
+> 🎥 **See the keyboard in action:** The video above shows real-time next-character illumination on the Kreo Hive 75 mechanical keyboard.  
+> 🔗 Read the full engineering breakdown and community discussion on **[LinkedIn](https://www.linkedin.com/posts/drix10_llm-ondeviceai-mechanicalkeyboards-activity-7503825549148975105-CW31)** *(Shortlink: [lnkd.in/p/gipWJfmn](https://lnkd.in/p/gipWJfmn))*.
 
 ## Key Pillars
 
