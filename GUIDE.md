@@ -881,5 +881,5 @@ python hardware_controller.py --key w ff0000 space 00ff00
 
 ### Running the Test Suite
 ```powershell
-python test_suite.py
+python tests/test_suite.py
 ```

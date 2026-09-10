@@ -2,6 +2,7 @@
 
 import errno
 import os
+from pathlib import Path
 import queue
 import sys
 import tempfile
@@ -10,6 +11,8 @@ import unittest
 from unittest import mock
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from hardware_controller import (
     KeyboardController,

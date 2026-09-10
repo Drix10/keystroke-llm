@@ -242,7 +242,7 @@ python hardware_controller.py --mock --color 202020 --brightness 0.5
 Run the test suite from the repository root:
 
 ```powershell
-python -m unittest test_suite.py
+python tests/test_suite.py
 ```
 
 The tests cover model forward passes and checkpoint round trips, tokenizer and key mapping, RGB buffers, input normalization and debouncing, dataset creation, attention rendering, and predictive app lifecycle behavior.
@@ -259,7 +259,7 @@ The tests cover model forward passes and checkpoint round trips, tokenizer and k
 | `profiles/hive75.json` | Kreo Hive 75 USB identity, protocol, and LED slots |
 | `data/sample_training_text.txt` | Example training corpus |
 | `checkpoints/` | Saved model weights and training logs |
-| `test_suite.py` | Portable `unittest` coverage |
+| `tests/test_suite.py` | Portable `unittest` coverage |
 | `DemoVideo.mp4` | Recorded hardware demonstration |
 | `GUIDE.md` | Full architecture and implementation walkthrough |
 
