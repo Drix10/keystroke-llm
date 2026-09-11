@@ -175,7 +175,7 @@ The live application is intentionally more than a loop around `model.forward()`:
 - Empty, NaN, or very low-confidence predictions return the board to white.
 - Four recent WASD events or five identical repeated keys activate a temporary gaming pause.
 - After the idle timeout, red prediction highlights are cleared.
-- By default the live process stays active indefinitely and does not dim predictions during typing pauses. Use `--idle-timeout SECONDS` to restore timed dimming.
+- By default the live process stays active indefinitely and clears prediction highlights after 6 seconds of inactivity. Use `--idle-timeout SECONDS` to change the delay, or `0` to disable expiration.
 - A lockfile prevents multiple processes from fighting over the same keyboard.
 - Closing the application restores the keyboard's default lighting mode.
 

@@ -182,6 +182,37 @@ def _is_pid_running(pid: int) -> bool:
             return False
 
 
+def _windows_process_start_time(pid: int):
+    if os.name != "nt" or pid <= 0:
+        return None
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        SYNCHRONIZE = 0x00100000
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = kernel32.OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return None
+        try:
+            creation = ctypes.c_ulonglong()
+            exit_time = ctypes.c_ulonglong()
+            kernel_time = ctypes.c_ulonglong()
+            user_time = ctypes.c_ulonglong()
+            if not kernel32.GetProcessTimes(
+                    handle,
+                    ctypes.byref(creation),
+                    ctypes.byref(exit_time),
+                    ctypes.byref(kernel_time),
+                    ctypes.byref(user_time)):
+                return None
+            return creation.value
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return None
+
+
 class KeyboardController:
     """Hardware controller with dual HID/ioctl support, keep-alive, and auto-reconnect."""
 
@@ -229,7 +260,9 @@ class KeyboardController:
         atexit.register(self.close)
 
     def _acquire_lock(self):
-        lock_contents = str(os.getpid()).encode("ascii")
+        pid = os.getpid()
+        start_time = _windows_process_start_time(pid)
+        lock_contents = f"{pid}:{start_time or 0}".encode("ascii")
         for attempt in range(3):
             try:
                 fd = os.open(self.lockfile_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -242,13 +275,19 @@ class KeyboardController:
             except FileExistsError:
                 try:
                     with open(self.lockfile_path, "r", encoding="utf-8") as f:
-                        old_pid = int(f.read().strip())
+                        lock_data = f.read().strip().split(":", 1)
+                        old_pid = int(lock_data[0])
+                        old_start_time = int(lock_data[1]) if len(lock_data) == 2 else None
                 except (OSError, ValueError):
                     if attempt < 2:
                         time.sleep(0.05)
                         continue
                     raise RuntimeError("Controller lock file remained unreadable.")
-                if _is_pid_running(old_pid):
+                owner_is_running = _is_pid_running(old_pid)
+                if owner_is_running and old_start_time:
+                    current_start_time = _windows_process_start_time(old_pid)
+                    owner_is_running = current_start_time == old_start_time
+                if owner_is_running:
                     raise RuntimeError(f"Another keyboard controller instance (PID {old_pid}) is active.")
                 try:
                     os.remove(self.lockfile_path)
@@ -267,7 +306,7 @@ class KeyboardController:
             if os.path.exists(self.lockfile_path):
                 try:
                     with open(self.lockfile_path, "r", encoding="utf-8") as f:
-                        file_pid = int(f.read().strip())
+                        file_pid = int(f.read().strip().split(":", 1)[0])
                     if file_pid == os.getpid():
                         os.remove(self.lockfile_path)
                 except Exception:

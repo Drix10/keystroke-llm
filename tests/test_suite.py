@@ -311,20 +311,16 @@ class TestKeystrokeLLM(unittest.TestCase):
         finally:
             app.cleanup()
 
-    def test_12_idle_timeout_disabled_by_default(self):
+    def test_12_idle_timeout_clears_predictions_by_default(self):
         checkpoint_path = "checkpoints/model_final.npz"
         if not os.path.exists(checkpoint_path):
             self.skipTest(f"Checkpoint unavailable: {checkpoint_path}")
         app = PredictiveKeyLightsApp(checkpoint_path=checkpoint_path, mock=True)
         try:
-            self.assertEqual(app.idle_timeout, 0.0)
+            self.assertEqual(app.idle_timeout, 6.0)
             app.rolling_buffer = list("hello")
             app.last_type_time = time.time() - 60
             app._update_prediction()
-            app._handle_idle_iteration()
-            self.assertFalse(app.is_idle)
-
-            app.idle_timeout = 1.0
             app._handle_idle_iteration()
             self.assertTrue(app.is_idle)
             self.assertEqual(app.kbd._current_colors, {})

@@ -263,7 +263,7 @@ class PredictiveKeyLightsApp:
                  top_k: int = 5, brightness: float = 1.0,
                  context_len: int = 48, show_probs: bool = False,
                  show_attn: bool = False, mock: bool = False,
-                 idle_timeout: float = 0.0, demo: bool = False,
+                 idle_timeout: float = 6.0, demo: bool = False,
                  seed: str = "", auto_pause_wasd: bool = True):
         self.top_k = min(max(1, top_k), 5)
         self.brightness = max(0.0, min(1.0, brightness))
@@ -541,7 +541,7 @@ def main():
     parser.add_argument("--show-probs", action="store_true", help="Print live top predictions to terminal")
     parser.add_argument("--show-attn", action="store_true", help="Visualize causal attention matrix")
     parser.add_argument("--mock", action="store_true", help="Force mock mode (no physical keyboard required)")
-    parser.add_argument("--idle-timeout", type=float, default=0.0, help="Seconds before dimming during typing pause (0 disables dimming; default: disabled)")
+    parser.add_argument("--idle-timeout", type=float, default=6.0, help="Seconds before dimming during typing pause (0 disables dimming; default: 6)")
     parser.add_argument("--demo", action="store_true", help="Run automated typing demo showing predictions live")
     parser.add_argument("--seed", type=str, default="", help="Initial text prompt to seed predictions")
     parser.add_argument("--no-auto-pause-wasd", action="store_true", help="Disable automatic pause on WASD movement / key spam")
