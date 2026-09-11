@@ -29,6 +29,35 @@ RANK_COLORS = [
     "FF9999",  # Rank 5: Pale Red
 ]
 
+STARTUP_VALUE_NAME = "KeystrokeLLM"
+
+
+def configure_windows_startup(install: bool):
+    """Install or remove the per-user Windows startup entry."""
+    if os.name != "nt":
+        raise RuntimeError("Windows startup registration is only available on Windows.")
+
+    import winreg
+
+    run_key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key_path, 0, winreg.KEY_SET_VALUE) as run_key:
+        if install:
+            checkpoint_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "checkpoints", "model_final.npz"))
+            executable_path = sys.executable
+            if os.name == "nt" and os.path.basename(executable_path).lower() == "python.exe":
+                windowless_executable = os.path.join(os.path.dirname(executable_path), "pythonw.exe")
+                if os.path.exists(windowless_executable):
+                    executable_path = windowless_executable
+            command = f'"{executable_path}" "{os.path.abspath(__file__)}" --checkpoint "{checkpoint_path}"'
+            winreg.SetValueEx(run_key, STARTUP_VALUE_NAME, 0, winreg.REG_SZ, command)
+            print(f"Installed Windows startup entry: {command}")
+        else:
+            try:
+                winreg.DeleteValue(run_key, STARTUP_VALUE_NAME)
+                print("Removed Windows startup entry.")
+            except FileNotFoundError:
+                print("Windows startup entry was not installed.")
+
 
 def render_attention_matrix(tokens: List[str], attn_weights: np.ndarray):
     """Prints an ASCII causal attention heatmap for the active context."""
@@ -67,6 +96,9 @@ class LowLatencyInputReader:
         self.key_queue = key_queue
         self.running = True
         self._last_key_time = {}
+        self._debounce_lock = threading.Lock()
+        self._event_lock = threading.Lock()
+        self.dropped_events = 0
         self.listener = None
         self._start_capture()
 
@@ -107,6 +139,8 @@ class LowLatencyInputReader:
         self.thread.start()
 
     def _enqueue(self, ch: str):
+        if not ch:
+            return
         # Normalize carriage return to newline and DEL to backspace.
         # Different terminals (PowerShell, Windows Terminal, bash) emit different byte
         # codes for Enter (\r vs \n) and Backspace (\x7f vs \b).
@@ -132,16 +166,30 @@ class LowLatencyInputReader:
         # MEMORY SAFETY FIX: Prune the debounce dictionary when it exceeds 256 keys so long
         # typing sessions don't leak memory over time.
         now = time.time()
-        if len(self._last_key_time) > 256:
-            sorted_items = sorted(self._last_key_time.items(), key=lambda item: item[1])
-            self._last_key_time = dict(sorted_items[-128:])
-        last_t = self._last_key_time.get(ch, 0.0)
-        if (now - last_t) > 0.015:
+        with self._debounce_lock:
+            if len(self._last_key_time) > 256:
+                sorted_items = sorted(self._last_key_time.items(), key=lambda item: item[1])
+                self._last_key_time = dict(sorted_items[-128:])
+            last_t = self._last_key_time.get(ch, 0.0)
+            if (now - last_t) <= 0.015:
+                return
             self._last_key_time[ch] = now
+        self._put_event(ch)
+
+    def _put_event(self, ch: str):
+        with self._event_lock:
             try:
                 self.key_queue.put_nowait(ch)
             except queue.Full:
-                pass
+                try:
+                    self.key_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self.key_queue.put_nowait(ch)
+                except queue.Full:
+                    pass
+                self.dropped_events += 1
 
     def _worker(self):
         # Direct console input reader
@@ -174,8 +222,8 @@ class LowLatencyInputReader:
             import termios
             import tty
 
-            fd = sys.stdin.fileno()
             try:
+                fd = sys.stdin.fileno()
                 old = termios.tcgetattr(fd)
                 tty.setcbreak(fd)
                 try:
@@ -197,6 +245,10 @@ class LowLatencyInputReader:
                 self.listener.stop()
             except Exception:
                 pass
+            try:
+                self.listener.join(timeout=0.5)
+            except Exception:
+                pass
         if hasattr(self, "thread") and self.thread is not None and self.thread.is_alive():
             try:
                 self.thread.join(timeout=0.3)
@@ -211,7 +263,7 @@ class PredictiveKeyLightsApp:
                  top_k: int = 5, brightness: float = 1.0,
                  context_len: int = 48, show_probs: bool = False,
                  show_attn: bool = False, mock: bool = False,
-                 idle_timeout: float = 6.0, demo: bool = False,
+                 idle_timeout: float = 0.0, demo: bool = False,
                  seed: str = "", auto_pause_wasd: bool = True):
         self.top_k = min(max(1, top_k), 5)
         self.brightness = max(0.0, min(1.0, brightness))
@@ -240,12 +292,16 @@ class PredictiveKeyLightsApp:
         self.tokenizer = CharTokenizer(vocab=vocab)
         self.kbd = KeyboardController(profile_name=profile_name, mock=mock)
 
-        self.key_queue = queue.Queue(maxsize=128)
+        self.key_queue = queue.Queue(maxsize=1024)
         self.rolling_buffer = list(seed) if seed else []
         self.last_type_time = time.time()
         self.is_idle = False
 
-        self.input_reader = LowLatencyInputReader(self.key_queue)
+        try:
+            self.input_reader = LowLatencyInputReader(self.key_queue)
+        except Exception:
+            self.kbd.close()
+            raise
         self.running = True
         self._demo_stop_event = threading.Event()
 
@@ -262,8 +318,8 @@ class PredictiveKeyLightsApp:
                 if not self.running or self._demo_stop_event.is_set():
                     return
                 try:
-                    self.key_queue.put_nowait(ch)
-                except queue.Full:
+                    self.input_reader._put_event(ch)
+                except Exception:
                     pass
                 if self._demo_stop_event.wait(1.2):
                     return
@@ -279,13 +335,17 @@ class PredictiveKeyLightsApp:
         print(f"\n[PredictiveKeyLights] Active ({mode_str}) | Context: {self.context_len}")
         print("Type in any window. Press Ctrl+C to exit.\n", flush=True)
 
-        # Initial state: If seed provided, predict immediately; otherwise solid white backlight
-        if self.rolling_buffer:
-            self._update_prediction()
-        else:
-            self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
-            if self.show_probs:
-                print("[Context: (empty)] -> Start typing to see predictions...", flush=True)
+        try:
+            # Initial state: If seed provided, predict immediately; otherwise solid white backlight
+            if self.rolling_buffer:
+                self._update_prediction()
+            else:
+                self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+                if self.show_probs:
+                    print("[Context: (empty)] -> Start typing to see predictions...", flush=True)
+        except BaseException:
+            self.cleanup()
+            raise
 
         try:
             while self.running:
@@ -371,24 +431,30 @@ class PredictiveKeyLightsApp:
                         if self.show_probs:
                             print("[Context: (empty)] -> Start typing to see predictions...", flush=True)
                 else:
-                    if self.is_gaming and (time.time() - self.last_type_time > 1.2):
-                        self.is_gaming = False
-                        self.wasd_streak = 0
-                        self.repeat_count = 0
-                        if self.show_probs:
-                            print("[Typing Resumed] Idle timeout.", flush=True)
-
-                    if not self.is_idle and (time.time() - self.last_type_time > self.idle_timeout):
-                        self.is_idle = True
-                        self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
-                        if self.show_probs and self.rolling_buffer:
-                            ctx = "".join(self.rolling_buffer)[-16:]
-                            print(f"[Context: {ctx!r:<16}] -> (Idle)", flush=True)
+                    self._handle_idle_iteration()
 
         except KeyboardInterrupt:
             pass
         finally:
             self.cleanup()
+
+    def _handle_idle_iteration(self):
+        now = time.time()
+        if self.is_gaming and now - self.last_type_time > 1.2:
+            self.is_gaming = False
+            self.wasd_streak = 0
+            self.repeat_count = 0
+            if self.show_probs:
+                print("[Typing Resumed] Idle timeout.", flush=True)
+
+        if (self.idle_timeout > 0 and
+                not self.is_idle and
+                now - self.last_type_time > self.idle_timeout):
+            self.is_idle = True
+            self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+            if self.show_probs and self.rolling_buffer:
+                ctx = "".join(self.rolling_buffer)[-16:]
+                print(f"[Context: {ctx!r:<16}] -> (Idle)", flush=True)
 
     def _update_prediction(self):
         if not self.rolling_buffer:
@@ -465,6 +531,8 @@ def main():
     if os.name == "nt":
         os.system("")  # Enable Windows virtual terminal / ANSI escape sequences
     parser = argparse.ArgumentParser(description="Predictive Key Lights - Real-time Keystroke Lighting")
+    parser.add_argument("--install-startup", action="store_true", help="Start this live predictor automatically when you sign in to Windows")
+    parser.add_argument("--uninstall-startup", action="store_true", help="Remove the automatic Windows startup entry")
     parser.add_argument("--checkpoint", type=str, default="checkpoints/model_final.npz", help="Model checkpoint path")
     parser.add_argument("--profile", type=str, default="hive75", help="Keyboard profile (default: hive75)")
     parser.add_argument("--top-k", type=int, default=5, help="Number of predicted keys to illuminate (1-5)")
@@ -473,11 +541,20 @@ def main():
     parser.add_argument("--show-probs", action="store_true", help="Print live top predictions to terminal")
     parser.add_argument("--show-attn", action="store_true", help="Visualize causal attention matrix")
     parser.add_argument("--mock", action="store_true", help="Force mock mode (no physical keyboard required)")
-    parser.add_argument("--idle-timeout", type=float, default=6.0, help="Seconds before dimming during typing pause")
+    parser.add_argument("--idle-timeout", type=float, default=0.0, help="Seconds before dimming during typing pause (0 disables dimming; default: disabled)")
     parser.add_argument("--demo", action="store_true", help="Run automated typing demo showing predictions live")
     parser.add_argument("--seed", type=str, default="", help="Initial text prompt to seed predictions")
     parser.add_argument("--no-auto-pause-wasd", action="store_true", help="Disable automatic pause on WASD movement / key spam")
     args = parser.parse_args()
+
+    if args.install_startup or args.uninstall_startup:
+        if args.install_startup and args.uninstall_startup:
+            parser.error("--install-startup and --uninstall-startup cannot be used together")
+        configure_windows_startup(install=args.install_startup)
+        return
+
+    if args.idle_timeout < 0:
+        parser.error("--idle-timeout must be 0 or greater")
 
     app = PredictiveKeyLightsApp(
         checkpoint_path=args.checkpoint,

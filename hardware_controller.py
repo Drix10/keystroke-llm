@@ -6,6 +6,7 @@ Supports both:
 Includes background keep-alive to avoid firmware timeouts and automatic reconnect.
 """
 
+import ast
 import atexit
 import errno
 import glob
@@ -56,6 +57,37 @@ def scale_rgb(r: int, g: int, b: int, brightness: float) -> Tuple[int, int, int]
     return int(r * f), int(g * f), int(b * f)
 
 
+def _evaluate_slot_formula(formula: str, col: int, row: int) -> int:
+    allowed_binary = (ast.Add, ast.Sub, ast.Mult, ast.FloorDiv, ast.Mod)
+    allowed_unary = (ast.UAdd, ast.USub)
+
+    def evaluate(node):
+        if isinstance(node, ast.Expression):
+            return evaluate(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return node.value
+        if isinstance(node, ast.Name) and node.id in {"col", "row"}:
+            return col if node.id == "col" else row
+        if isinstance(node, ast.BinOp) and isinstance(node.op, allowed_binary):
+            left = evaluate(node.left)
+            right = evaluate(node.right)
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.FloorDiv):
+                return left // right
+            return left % right
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, allowed_unary):
+            value = evaluate(node.operand)
+            return value if isinstance(node.op, ast.UAdd) else -value
+        raise ValueError("slot formula may only use integer arithmetic with col and row")
+
+    return int(evaluate(ast.parse(formula, mode="eval")))
+
+
 def _compute_evision_checksum(buf: bytearray) -> bytearray:
     # The EVision V2 microcontroller requires a 16-bit sum checksum across bytes 3..63,
     # stored little-endian at bytes 1 (low) and 2 (high).
@@ -95,7 +127,7 @@ class KeyboardProfile:
             name = kd["name"].lower()
             slot = kd.get("slot")
             if slot is None and formula:
-                slot = int(eval(formula, {"__builtins__": {}}, {"col": kd["col"], "row": kd["row"]}))
+                slot = _evaluate_slot_formula(formula, kd["col"], kd["row"])
             if slot is not None:
                 self.slot_map[name] = slot
 
@@ -153,7 +185,15 @@ def _is_pid_running(pid: int) -> bool:
 class KeyboardController:
     """Hardware controller with dual HID/ioctl support, keep-alive, and auto-reconnect."""
 
-    DISCONNECT_ERRNOS = (5, 19, 32, 71)
+    DISCONNECT_ERRNOS = tuple({
+        errno.EBADF,
+        errno.EIO,
+        errno.ENODEV,
+        errno.EPIPE,
+        errno.ENXIO,
+        getattr(errno, "EPROTO", 71),
+        getattr(errno, "ESHUTDOWN", 108),
+    })
 
     def __init__(self, profile_name: str = "hive75", mock: bool = False, keepalive_hz: float = 1.0):
         self.profile = load_profile(profile_name)
@@ -167,7 +207,8 @@ class KeyboardController:
         self.rgb_buffer = bytearray(self.profile.num_slots * 3)
         self._current_colors: Dict[str, str] = {}
         self._lock = threading.Lock()
-        self._running = False
+        self._connection_lock = threading.Lock()
+        self._running = True
         self._stop_event = threading.Event()
         self._last_reconnect_attempt = 0.0
         self._keepalive_thread: Optional[threading.Thread] = None
@@ -181,7 +222,6 @@ class KeyboardController:
         else:
             print(f"[HardwareController] Running in MOCK MODE ({self.profile.name})")
 
-        self._running = True
         self._keepalive_thread = threading.Thread(target=self._keepalive_loop, daemon=True)
         self._keepalive_thread.start()
 
@@ -189,27 +229,36 @@ class KeyboardController:
         atexit.register(self.close)
 
     def _acquire_lock(self):
-        try:
-            if os.path.exists(self.lockfile_path):
+        lock_contents = str(os.getpid()).encode("ascii")
+        for attempt in range(3):
+            try:
+                fd = os.open(self.lockfile_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                try:
+                    os.write(fd, lock_contents)
+                finally:
+                    os.close(fd)
+                self._lock_held = True
+                return
+            except FileExistsError:
                 try:
                     with open(self.lockfile_path, "r", encoding="utf-8") as f:
                         old_pid = int(f.read().strip())
-                    if _is_pid_running(old_pid) and old_pid != os.getpid():
-                        print(f"[Warning] Another instance (PID {old_pid}) is active.", file=sys.stderr)
-                        self._lock_held = False
-                        return
-                    else:
-                        try:
-                            os.remove(self.lockfile_path)
-                        except Exception:
-                            pass
-                except Exception:
+                except (OSError, ValueError):
+                    if attempt < 2:
+                        time.sleep(0.05)
+                        continue
+                    raise RuntimeError("Controller lock file remained unreadable.")
+                if _is_pid_running(old_pid):
+                    raise RuntimeError(f"Another keyboard controller instance (PID {old_pid}) is active.")
+                try:
+                    os.remove(self.lockfile_path)
+                except FileNotFoundError:
                     pass
-            with open(self.lockfile_path, "w", encoding="utf-8") as f:
-                f.write(str(os.getpid()))
-            self._lock_held = True
-        except Exception:
-            self._lock_held = False
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                raise RuntimeError(f"Unable to acquire controller lock: {exc}") from exc
+        raise RuntimeError("Unable to acquire controller lock after retries.")
 
     def _release_lock(self):
         if not getattr(self, "_lock_held", False):
@@ -239,7 +288,9 @@ class KeyboardController:
             except Exception:
                 pass
             self.hid_device = None
+        self.is_evision = False
 
+        handle = None
         try:
             devs = hid.enumerate()
             target_path = None
@@ -276,14 +327,23 @@ class KeyboardController:
                         break
 
             if target_path:
-                h = hid.device()
-                h.open_path(target_path)
-                self.hid_device = h
+                handle = hid.device()
+                handle.open_path(target_path)
+                if not self._running or self._stop_event.is_set():
+                    handle.close()
+                    return False
+                self.hid_device = handle
+                handle = None
                 self.is_evision = is_evision
                 mode_desc = "Evision 0xFF1C (64B chunks)" if is_evision else "SinoWealth (Feature Reports)"
                 print(f"[HardwareController] Connected via USB HID to {self.profile.name} [{mode_desc}]")
                 return True
         except Exception as e:
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
             print(f"[HardwareController] HID connection attempt: {e}")
         return False
 
@@ -292,10 +352,12 @@ class KeyboardController:
         if not HAS_FCNTL or os.name != "posix":
             return False
         if self.fd is not None:
+            old_fd = self.fd
             try:
-                os.close(self.fd)
-            except Exception:
-                pass
+                os.close(old_fd)
+            except OSError as exc:
+                if exc.errno != errno.EBADF:
+                    return False
             self.fd = None
 
         try:
@@ -311,7 +373,12 @@ class KeyboardController:
                     if any(t in uevent for t in tokens) and desc_marker in desc:
                         dev = "/dev/" + os.path.basename(path)
                         self.dev_path = dev
-                        self.fd = os.open(self.dev_path, os.O_RDWR)
+                        fd = os.open(self.dev_path, os.O_RDWR)
+                        if not self._running or self._stop_event.is_set():
+                            os.close(fd)
+                            return False
+                        self.fd = fd
+                        self.is_evision = False
                         print(f"[HardwareController] Connected via hidraw to {self.profile.name} at {self.dev_path}")
                         return True
                 except OSError:
@@ -325,11 +392,18 @@ class KeyboardController:
         return False
 
     def _connect(self):
+        with self._connection_lock:
+            if not self._running or self._stop_event.is_set():
+                return
+            self._connect_locked()
+
+    def _connect_locked(self):
         # 1. Try HID first (works on Windows, macOS, Linux with python-hid)
         if self._connect_hid():
             return
 
         # 2. Try Linux /dev/hidraw ioctl
+        self.is_evision = False
         if self._connect_linux_hidraw():
             return
 
@@ -370,11 +444,13 @@ class KeyboardController:
             # In early versions, calling _connect() here created a lock inversion with the
             # keepalive thread. Instead, cleanly close the stale handle and let the keepalive
             # thread handle reconnection sequentially.
+            handle = self.hid_device
+            self.hid_device = None
+            self.is_evision = False
             try:
-                self.hid_device.close()
+                handle.close()
             except Exception:
                 pass
-            self.hid_device = None
 
     def _flush_frame(self, read_ack: bool = True):
         if self.is_evision:
@@ -393,11 +469,13 @@ class KeyboardController:
                 return
             except Exception:
                 # Mark disconnected — keepalive thread owns reconnection to avoid lock races.
+                handle = self.hid_device
+                self.hid_device = None
+                self.is_evision = False
                 try:
-                    self.hid_device.close()
+                    handle.close()
                 except Exception:
                     pass
-                self.hid_device = None
 
         # Path B: Linux /dev/hidraw
         if self.fd is not None and HAS_FCNTL:
@@ -405,11 +483,11 @@ class KeyboardController:
                 fcntl.ioctl(self.fd, hid_set_feature_cmd(len(pkt)), pkt, True)
             except OSError as e:
                 if e.errno in self.DISCONNECT_ERRNOS:
-                    if self._connect_linux_hidraw():
-                        try:
-                            fcntl.ioctl(self.fd, hid_set_feature_cmd(len(pkt)), pkt, True)
-                        except OSError:
-                            pass
+                    try:
+                        os.close(self.fd)
+                    except OSError:
+                        pass
+                    self.fd = None
                 else:
                     raise
 
@@ -419,15 +497,14 @@ class KeyboardController:
         # rainbow breathing mode. Streaming at 10 Hz (100ms interval) keeps the MCU locked in
         # dynamic host-controlled lighting mode without overloading the USB bus.
         while self._running and not self._stop_event.is_set():
-            if self.is_evision:
-                interval = 0.1  # 10 Hz keepalive for EVision V2
-            elif self.keepalive_hz > 0:
-                interval = 1.0 / self.keepalive_hz
-            else:
-                # keepalive_hz == 0 means truly disabled — only check for stop every second
+            if self.keepalive_hz <= 0:
                 if self._stop_event.wait(1.0):
                     break
                 continue
+            if self.is_evision:
+                interval = 0.1  # 10 Hz keepalive for EVision V2
+            else:
+                interval = 1.0 / self.keepalive_hz
             if self._stop_event.wait(interval):
                 break
             if not self._running or self._stop_event.is_set():
@@ -446,8 +523,7 @@ class KeyboardController:
                     now = time.time()
                     if now - self._last_reconnect_attempt > 2.0:
                         self._last_reconnect_attempt = now
-                        with self._lock:
-                            self._connect()
+                        self._connect()
 
     def set_key_colors(self, key_colors: Dict[str, str], brightness: float = 1.0, clear_others: bool = True, default_background: Optional[str] = "ffffff"):
         """Sets RGB colors for specified keys.
@@ -518,23 +594,48 @@ class KeyboardController:
                 pass
             self._registered_atexit = False
 
+        forced_abort = False
         if self._keepalive_thread and self._keepalive_thread.is_alive():
             self._keepalive_thread.join(timeout=1.0)
+            if self._keepalive_thread.is_alive():
+                forced_abort = True
+                self._abort_transports()
+                self._keepalive_thread.join(timeout=1.0)
 
-        with self._lock:
-            try:
-                self.restore_default_mode()
-                if self.hid_device is not None:
-                    self.hid_device.close()
-                    self.hid_device = None
-                if self.fd is not None:
-                    os.close(self.fd)
-                    self.fd = None
-            except Exception:
-                pass
+        with self._connection_lock:
+            if not forced_abort:
+                self._restore_default_mode_bounded()
+            self._abort_transports_locked()
 
         self._release_lock()
         print("\n[HardwareController] Closed (restored default lighting).")
+
+    def _restore_default_mode_bounded(self):
+        restore_thread = threading.Thread(target=self.restore_default_mode, daemon=True)
+        restore_thread.start()
+        restore_thread.join(timeout=0.25)
+
+    def _abort_transports(self):
+        with self._connection_lock:
+            self._abort_transports_locked()
+
+    def _abort_transports_locked(self):
+        """Close transport handles; caller must hold _connection_lock."""
+        handle = self.hid_device
+        self.hid_device = None
+        self.is_evision = False
+        fd = self.fd
+        self.fd = None
+        if handle is not None:
+            try:
+                handle.close()
+            except Exception:
+                pass
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
     def __enter__(self):
         return self

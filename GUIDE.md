@@ -755,7 +755,7 @@ To maintain an intuitive lighting experience:
   [Context: (empty)] -> Start typing to see predictions...
   ```
 - **Active Prediction State**: Each typed character appends to `self.rolling_buffer` (capped at `seq_len`). The model computes next-token probabilities, and the Top-K keys illuminate in graded shades of red.
-- **Idle Timeout**: If typing ceases for more than `--idle-timeout` (default $6.0\text{ seconds}$), all red highlights are removed, returning the board to solid white until the next keystroke is pressed.
+- **Idle Timeout**: By default, `--idle-timeout` is `0`, so the live process remains active indefinitely and prediction highlights are not cleared during typing pauses. Set it to a positive number of seconds to return the board to solid white after inactivity.
 
 ---
 

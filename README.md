@@ -175,6 +175,7 @@ The live application is intentionally more than a loop around `model.forward()`:
 - Empty, NaN, or very low-confidence predictions return the board to white.
 - Four recent WASD events or five identical repeated keys activate a temporary gaming pause.
 - After the idle timeout, red prediction highlights are cleared.
+- By default the live process stays active indefinitely and does not dim predictions during typing pauses. Use `--idle-timeout SECONDS` to restore timed dimming.
 - A lockfile prevents multiple processes from fighting over the same keyboard.
 - Closing the application restores the keyboard's default lighting mode.
 
@@ -206,6 +207,14 @@ Then run the automated mock demo:
 ```powershell
 python predict_and_light.py --mock --demo --show-probs
 ```
+
+To start the live predictor automatically whenever you sign in to Windows, run this once:
+
+```powershell
+python predict_and_light.py --install-startup
+```
+
+Remove that startup entry with `python predict_and_light.py --uninstall-startup`.
 
 The demo feeds sample text into the same queue used by live input and prints the mock LED state. To type into the mock runtime yourself:
 

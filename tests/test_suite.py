@@ -311,12 +311,32 @@ class TestKeystrokeLLM(unittest.TestCase):
         finally:
             app.cleanup()
 
-    def test_12_attention_matrix_edge_cases(self):
+    def test_12_idle_timeout_disabled_by_default(self):
+        checkpoint_path = "checkpoints/model_final.npz"
+        if not os.path.exists(checkpoint_path):
+            self.skipTest(f"Checkpoint unavailable: {checkpoint_path}")
+        app = PredictiveKeyLightsApp(checkpoint_path=checkpoint_path, mock=True)
+        try:
+            self.assertEqual(app.idle_timeout, 0.0)
+            app.rolling_buffer = list("hello")
+            app.last_type_time = time.time() - 60
+            app._update_prediction()
+            app._handle_idle_iteration()
+            self.assertFalse(app.is_idle)
+
+            app.idle_timeout = 1.0
+            app._handle_idle_iteration()
+            self.assertTrue(app.is_idle)
+            self.assertEqual(app.kbd._current_colors, {})
+        finally:
+            app.cleanup()
+
+    def test_13_attention_matrix_edge_cases(self):
         # Empty inputs should safely return without exception
         render_attention_matrix([], np.array([]))
         render_attention_matrix(["a"], np.array([[1.0]]))
 
-    def test_13_controller_atexit_and_idempotence(self):
+    def test_14_controller_atexit_and_idempotence(self):
         ctrl = KeyboardController(mock=True)
         self.assertTrue(ctrl._registered_atexit)
         self.assertTrue(ctrl._running)
@@ -326,7 +346,7 @@ class TestKeystrokeLLM(unittest.TestCase):
         # Second close must be a no-op and not raise
         ctrl.close()
 
-    def test_14_debounce_cache_pruning(self):
+    def test_15_debounce_cache_pruning(self):
         q = queue.Queue(maxsize=512)
         reader = LowLatencyInputReader(q)
         try:
@@ -337,6 +357,59 @@ class TestKeystrokeLLM(unittest.TestCase):
             self.assertLessEqual(len(reader._last_key_time), 257)
         finally:
             reader.stop()
+
+    def test_16_controller_lock_rejects_duplicate_owner(self):
+        ctrl = KeyboardController(mock=True)
+        try:
+            with self.assertRaises(RuntimeError):
+                KeyboardController(mock=True)
+        finally:
+            ctrl.close()
+
+    def test_17_input_queue_overflow_remains_bounded(self):
+        q = queue.Queue(maxsize=2)
+        reader = LowLatencyInputReader(q)
+        try:
+            reader._put_event("a")
+            reader._put_event("b")
+            reader._put_event("c")
+            self.assertEqual(q.qsize(), 2)
+            self.assertEqual(reader.dropped_events, 1)
+            self.assertEqual(q.get_nowait(), "b")
+            self.assertEqual(q.get_nowait(), "c")
+        finally:
+            reader.stop()
+
+    def test_18_malformed_controller_lock_is_not_removed(self):
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as lock_file:
+            lock_file.write("not-a-pid")
+            lock_path = lock_file.name
+        try:
+            controller = KeyboardController.__new__(KeyboardController)
+            controller.lockfile_path = lock_path
+            controller._lock_held = False
+            with self.assertRaises(RuntimeError):
+                controller._acquire_lock()
+            with open(lock_path, "r", encoding="utf-8") as saved_lock:
+                self.assertEqual(saved_lock.read(), "not-a-pid")
+        finally:
+            if os.path.exists(lock_path):
+                os.remove(lock_path)
+
+    def test_19_startup_failure_cleans_up_runtime(self):
+        checkpoint_path = "checkpoints/model_final.npz"
+        if not os.path.exists(checkpoint_path):
+            self.skipTest(f"Checkpoint unavailable: {checkpoint_path}")
+        app = PredictiveKeyLightsApp(checkpoint_path=checkpoint_path, mock=True, seed="hello")
+        try:
+            with mock.patch.object(app, "_update_prediction", side_effect=RuntimeError("startup failure")):
+                with self.assertRaisesRegex(RuntimeError, "startup failure"):
+                    app.run()
+            self.assertFalse(app.running)
+            self.assertFalse(app.input_reader.running)
+            self.assertFalse(app.kbd._running)
+        finally:
+            app.cleanup()
 
 
 if __name__ == "__main__":
