@@ -5,6 +5,7 @@ import json
 import os
 import queue
 import re
+import signal
 import sys
 import threading
 import time
@@ -217,13 +218,8 @@ class LowLatencyInputReader:
         elif ch == "\x7f":
             ch = "\b"
 
-        # On Windows, msvcrt.getch() intercepts Ctrl+C (b'\x03') as a raw byte instead of
-        # raising KeyboardInterrupt. We manually signal interrupt_main() to allow clean exit.
+        # Ctrl+C is intentionally ignored; stop the background process from Task Manager.
         if ch == "\x03":
-            try:
-                _thread.interrupt_main()
-            except Exception:
-                pass
             return
 
         # Filter out unprintable terminal control sequences while preserving whitespace
@@ -267,11 +263,7 @@ class LowLatencyInputReader:
                 if msvcrt.kbhit():
                     ch = msvcrt.getch()
                     if ch == b'\x03':  # Ctrl+C from console
-                        try:
-                            _thread.interrupt_main()
-                        except Exception:
-                            pass
-                        break
+                        continue
                     elif ch in (b'\x00', b'\xe0'):
                         msvcrt.getch()  # discard special prefix
                     else:
@@ -612,6 +604,7 @@ class PredictiveKeyLightsApp:
 def main():
     if os.name == "nt":
         os.system("")  # Enable Windows virtual terminal / ANSI escape sequences
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     parser = argparse.ArgumentParser(description="Predictive Key Lights - Real-time Keystroke Lighting")
     parser.add_argument("--install-startup", action="store_true", help="Start this live predictor automatically when you sign in to Windows")
     parser.add_argument("--uninstall-startup", action="store_true", help="Remove the automatic Windows startup entry")

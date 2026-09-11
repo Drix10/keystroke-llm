@@ -140,6 +140,10 @@ class TestKeystrokeLLM(unittest.TestCase):
             reader._enqueue("\x16")  # Ctrl+V
             self.assertTrue(q.empty())
 
+            # Ctrl+C is ignored so the long-running process stays active.
+            reader._enqueue("\x03")
+            self.assertTrue(q.empty())
+
             # Test allowed backspace
             time.sleep(0.02)
             reader._enqueue("\b")
