@@ -138,38 +138,39 @@ def train():
 
     csv_path = os.path.join(args.checkpoint_dir, "loss_log.csv")
     csv_file = open(csv_path, "w", newline="", encoding="utf-8")
-    csv_writer = csv.writer(csv_file)
-    csv_writer.writerow(["epoch", "train_loss", "val_loss", "time_s"])
+    try:
+        csv_writer = csv.writer(csv_file)
+        csv_writer.writerow(["epoch", "train_loss", "val_loss", "time_s"])
 
-    print(f"Training for {args.epochs} epochs in '{args.mode}' mode (lr={args.lr}, stride={args.stride})...", flush=True)
-    start = time.time()
+        print(f"Training for {args.epochs} epochs in '{args.mode}' mode (lr={args.lr}, stride={args.stride})...", flush=True)
+        start = time.time()
 
-    for epoch in range(1, args.epochs + 1):
-        indices = np.random.permutation(len(train_dataset))
-        losses = []
-        ep_start = time.time()
+        for epoch in range(1, args.epochs + 1):
+            indices = np.random.permutation(len(train_dataset))
+            losses = []
+            ep_start = time.time()
 
-        for idx in indices:
-            ctx, tgt = train_dataset[idx]
-            if args.mode == "heuristic":
-                loss = model.train_step_heuristic(ctx, tgt, lr=args.lr)
-            else:
-                loss = model.train_step_backprop(ctx, tgt, lr=args.lr)
-            losses.append(loss)
+            for idx in indices:
+                ctx, tgt = train_dataset[idx]
+                if args.mode == "heuristic":
+                    loss = model.train_step_heuristic(ctx, tgt, lr=args.lr)
+                else:
+                    loss = model.train_step_backprop(ctx, tgt, lr=args.lr)
+                losses.append(loss)
 
-        avg_loss = float(np.mean(losses))
-        val_loss = compute_val_loss(model, val_dataset)
-        ep_time = time.time() - ep_start
-        val_str = f"{val_loss:.4f}" if not np.isnan(val_loss) else "n/a"
-        print(f"Epoch {epoch:2d}/{args.epochs:2d} | Train Loss: {avg_loss:.4f} | Val Loss: {val_str} | Time: {ep_time:.2f}s", flush=True)
-        csv_writer.writerow([epoch, f"{avg_loss:.6f}", f"{val_loss:.6f}", f"{ep_time:.2f}"])
-        csv_file.flush()
+            avg_loss = float(np.mean(losses))
+            val_loss = compute_val_loss(model, val_dataset)
+            ep_time = time.time() - ep_start
+            val_str = f"{val_loss:.4f}" if not np.isnan(val_loss) else "n/a"
+            print(f"Epoch {epoch:2d}/{args.epochs:2d} | Train Loss: {avg_loss:.4f} | Val Loss: {val_str} | Time: {ep_time:.2f}s", flush=True)
+            csv_writer.writerow([epoch, f"{avg_loss:.6f}", f"{val_loss:.6f}", f"{ep_time:.2f}"])
+            csv_file.flush()
 
-        if epoch % 5 == 0 or epoch == args.epochs:
-            ckpt_path = os.path.join(args.checkpoint_dir, f"model_{args.mode}_epoch_{epoch}.npz")
-            model.save_checkpoint(ckpt_path, vocab=tokenizer.vocab)
-
-    csv_file.close()
+            if epoch % 5 == 0 or epoch == args.epochs:
+                ckpt_path = os.path.join(args.checkpoint_dir, f"model_{args.mode}_epoch_{epoch}.npz")
+                model.save_checkpoint(ckpt_path, vocab=tokenizer.vocab)
+    finally:
+        csv_file.close()
     print(f"\nFinished training in {time.time() - start:.2f}s", flush=True)
     print(f"Loss log saved to {csv_path}", flush=True)
     evaluate_predictions(model, tokenizer, test_prompts)

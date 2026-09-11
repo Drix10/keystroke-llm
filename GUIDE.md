@@ -686,6 +686,10 @@ The EVision keyboard firmware features an internal watchdog timer. The controlle
 
 ## 8. Module 6: Real-Time Ingestion & Predictive Lighting (`predict_and_light.py`)
 
+### 8.0 Runtime Configuration
+
+The editable [`config.json`](README.md) file is the single source for user-facing runtime settings. It contains lighting colors, the white background, brightness, prediction count, idle and gaming timers, WASD thresholds, debounce timing, queue size, checkpoint, profile, and optional output flags. Command-line values override the file for one run; the Windows startup command loads the file directly.
+
 This is the conductor that connects the earlier modules. It receives characters, maintains the rolling context, calls the model, filters and ranks predictions, maps them to physical keys, and asks the controller to redraw the LEDs. It also decides when input is gaming movement rather than text and when idle time should clear the red highlights.
 
 The live loop should stay responsive even when a key is held or the USB device is slow. That is why input capture, the bounded queue, prediction work, and hardware updates are separated instead of putting all of them inside one keyboard callback.
@@ -696,9 +700,9 @@ Capturing keystrokes system-wide on modern operating systems introduces multiple
 - Global hooks (such as `WH_KEYBOARD_LL`) can be dropped or blocked by security policies, elevated windows, or console host buffers.
 - Direct console stdin reads (like `msvcrt.kbhit()`) only work when the terminal itself has input focus.
 
-`LowLatencyInputReader` combines both methods:
+`LowLatencyInputReader` uses a primary global hook with a console fallback:
 1. **Engine A (Global Hook)**: Runs `pynput.keyboard.Listener` in non-blocking mode via `listener.start()`. Captures keystrokes when the user is typing across any window (web browsers, code editors, games, chat apps).
-2. **Engine B (Console Poller)**: Runs alongside the global listener. On Windows it polls `msvcrt`; on POSIX systems it uses `select` and `termios`.
+2. **Engine B (Console Poller)**: Starts only if the global hook cannot initialize. On Windows it polls `msvcrt`; on POSIX systems it uses `select` and `termios`.
 3. **15ms Debounce Filter**: To prevent duplicate key ingestion when both engines detect the same physical keystroke, `_enqueue()` tracks timestamp deltas per character:
    ```python
    if (now - last_t) > 0.015:  # 15 ms debounce window

@@ -1,0 +1,33 @@
+{
+    "runtime": {
+        "checkpoint": "checkpoints/model_final.npz",
+        "profile": "hive75",
+        "top_k": 5,
+        "brightness": 3,
+        "context_len": 48,
+        "idle_timeout": 8.0,
+        "gaming_idle_timeout": 15.0,
+        "auto_pause_wasd": true,
+        "queue_size": 128,
+        "debounce_ms": 15,
+        "wasd_threshold": 4,
+        "repeat_threshold": 5,
+        "show_probs": false,
+        "show_attn": false,
+        "demo": false,
+        "seed": ""
+    },
+    "lighting": {
+        "background": "0F4A4A",
+        "rank_colors": [
+            "FF0000",
+            "FF3333",
+            "FF5555",
+            "FF7777",
+            "FF9999"
+        ]
+    },
+    "hardware": {
+        "keepalive_hz": null
+    }
+}

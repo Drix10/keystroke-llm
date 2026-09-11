@@ -27,6 +27,7 @@ from predict_and_light import (
     GAMING_IDLE_TIMEOUT,
     LowLatencyInputReader,
     PredictiveKeyLightsApp,
+    load_runtime_config,
     render_attention_matrix,
 )
 from train import build_sliding_window_dataset
@@ -439,6 +440,33 @@ class TestKeystrokeLLM(unittest.TestCase):
             self.assertFalse(app.kbd._running)
         finally:
             app.cleanup()
+
+    def test_22_runtime_config_overrides_defaults(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as config_file:
+            config_file.write('{"runtime": {"gaming_idle_timeout": 9}, "lighting": {"background": "101010", "rank_colors": ["100000", "200000", "300000", "400000", "500000"]}}')
+            config_path = config_file.name
+        try:
+            config = load_runtime_config(config_path)
+            self.assertEqual(config["runtime"]["gaming_idle_timeout"], 9)
+            self.assertEqual(config["lighting"]["background"], "101010")
+            self.assertEqual(len(config["lighting"]["rank_colors"]), 5)
+            self.assertEqual(config["runtime"]["top_k"], 5)
+        finally:
+            os.remove(config_path)
+
+    def test_23_runtime_config_rejects_invalid_values(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as config_file:
+            config_file.write('{"runtime": {"brightness": 2}, "lighting": {"rank_colors": ["GGGGGG", "000000", "000000", "000000", "000000"]}}')
+            config_path = config_file.name
+        try:
+            with self.assertRaises(ValueError):
+                load_runtime_config(config_path)
+        finally:
+            os.remove(config_path)
+
+    def test_24_unknown_profile_fails_fast(self):
+        with self.assertRaises(FileNotFoundError):
+            load_profile("profile-that-does-not-exist")
 
 
 if __name__ == "__main__":

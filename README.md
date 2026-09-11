@@ -166,7 +166,7 @@ The controller also supports the Linux `hidraw` feature-report path and keeps re
 
 The live application is intentionally more than a loop around `model.forward()`:
 
-- `pynput` captures global keyboard events while a platform console reader runs in its own worker.
+- `pynput` captures global keyboard events; the platform console reader is used as a fallback when the global hook is unavailable.
 - Carriage return becomes newline, terminal DEL becomes backspace, and unprintable controls are ignored.
 - A 15 ms debounce window reduces duplicate events.
 - A bounded queue prevents input capture from blocking forever during bursts.
@@ -195,6 +195,17 @@ Because the reader uses a global keyboard hook, it can observe keystrokes in oth
 The runtime ranks physical keys, not only raw characters. If several predicted characters map to the same switch, their probabilities are combined before the key is assigned a color.
 
 ## Try It Without Hardware
+
+## Edit Runtime Settings
+
+All user-tunable runtime settings live in [`config.json`](config.json). Edit that file to change:
+
+- The five ranked prediction colors and the unhighlighted background color.
+- Brightness, top-k count, context length, idle expiration, and gaming pause duration.
+- WASD/repeat detection thresholds, debounce timing, queue size, checkpoint, and keyboard profile.
+- Optional probability/attention output and hardware keepalive behavior.
+
+Command-line options override config values for one run. The Windows startup entry loads `config.json` directly, so changes apply after restarting the background predictor.
 
 Install the pinned dependencies:
 

@@ -129,6 +129,10 @@ class KeyboardProfile:
             if slot is None and formula:
                 slot = _evaluate_slot_formula(formula, kd["col"], kd["row"])
             if slot is not None:
+                if isinstance(slot, bool) or not isinstance(slot, int) or not 0 <= slot < self.num_slots:
+                    raise ValueError(f"Invalid LED slot for key {name!r}: {slot!r}")
+                if slot in self.slot_map.values():
+                    raise ValueError(f"Duplicate LED slot {slot} for key {name!r}")
                 self.slot_map[name] = slot
 
         # Common aliases for symbols and modifier keys
@@ -150,7 +154,7 @@ def load_profile(profile_name: str = "hive75") -> KeyboardProfile:
     base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles")
     target = os.path.join(base, f"{profile_name}.json")
     if not os.path.exists(target):
-        target = os.path.join(base, "hive75.json")
+        raise FileNotFoundError(f"Keyboard profile not found: {profile_name}")
     return KeyboardProfile(target)
 
 
@@ -226,10 +230,10 @@ class KeyboardController:
         getattr(errno, "ESHUTDOWN", 108),
     })
 
-    def __init__(self, profile_name: str = "hive75", mock: bool = False, keepalive_hz: float = 1.0):
+    def __init__(self, profile_name: str = "hive75", mock: bool = False, keepalive_hz: Optional[float] = None):
         self.profile = load_profile(profile_name)
         self.mock = mock
-        self.keepalive_hz = keepalive_hz
+        self.keepalive_hz = self.profile.keepalive_hz if keepalive_hz is None else keepalive_hz
         self.hid_device = None
         self.dev_path: Optional[str] = None
         self.fd: Optional[int] = None

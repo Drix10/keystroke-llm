@@ -1,8 +1,10 @@
 """Real-time keystroke capture, Transformer inference, and keyboard lighting."""
 
 import argparse
+import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -20,16 +22,75 @@ from key_mapper import (
 )
 from model import TinyTransformer
 
-# Color palette for predicted keys: Rank 1 is vivid solid red, ranks 2-5 are graded soft red
-RANK_COLORS = [
-    "FF0000",  # Rank 1: Solid Vivid Red
-    "FF3333",  # Rank 2: Bright Red
-    "FF5555",  # Rank 3: Soft Red
-    "FF7777",  # Rank 4: Light Red
-    "FF9999",  # Rank 5: Pale Red
+STARTUP_VALUE_NAME = "KeystrokeLLM"
+DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+DEFAULT_RANK_COLORS = [
+    "FF0000", "FF3333", "FF5555", "FF7777", "FF9999"
 ]
 
-STARTUP_VALUE_NAME = "KeystrokeLLM"
+
+def load_runtime_config(config_path: str = DEFAULT_CONFIG_PATH):
+    defaults = {
+        "runtime": {
+            "checkpoint": "checkpoints/model_final.npz",
+            "profile": "hive75",
+            "top_k": 5,
+            "brightness": 1.0,
+            "context_len": 48,
+            "idle_timeout": 6.0,
+            "gaming_idle_timeout": 12.0,
+            "auto_pause_wasd": True,
+            "queue_size": 1024,
+            "debounce_ms": 15,
+            "wasd_threshold": 4,
+            "repeat_threshold": 5,
+            "show_probs": False,
+            "show_attn": False,
+            "demo": False,
+            "seed": "",
+        },
+        "lighting": {"background": "FFFFFF", "rank_colors": list(DEFAULT_RANK_COLORS)},
+        "hardware": {"keepalive_hz": None},
+    }
+    if not os.path.exists(config_path):
+        return defaults
+    with open(config_path, "r", encoding="utf-8") as config_file:
+        supplied = json.load(config_file)
+    for section in defaults:
+        if isinstance(supplied.get(section), dict):
+            defaults[section].update(supplied[section])
+    runtime = defaults["runtime"]
+    lighting = defaults["lighting"]
+    hardware = defaults["hardware"]
+    integer_ranges = {"top_k": (1, 5), "context_len": (1, None), "queue_size": (1, None),
+                      "wasd_threshold": (1, None), "repeat_threshold": (1, None)}
+    for key, (minimum, maximum) in integer_ranges.items():
+        value = runtime[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum or (maximum and value > maximum):
+            raise ValueError(f"config runtime.{key} must be an integer in range {minimum}-{maximum or 'infinity'}")
+    for key in ("brightness", "idle_timeout", "gaming_idle_timeout", "debounce_ms"):
+        value = runtime[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise ValueError(f"config runtime.{key} must be a non-negative number")
+    for key in ("auto_pause_wasd", "show_probs", "show_attn", "demo"):
+        if not isinstance(runtime[key], bool):
+            raise ValueError(f"config runtime.{key} must be true or false")
+    for key in ("checkpoint", "profile", "seed"):
+        if not isinstance(runtime[key], str):
+            raise ValueError(f"config runtime.{key} must be a string")
+    if hardware["keepalive_hz"] is not None and (
+            isinstance(hardware["keepalive_hz"], bool) or
+            not isinstance(hardware["keepalive_hz"], (int, float)) or
+            hardware["keepalive_hz"] < 0):
+        raise ValueError("config hardware.keepalive_hz must be null or a non-negative number")
+    colors = [lighting["background"], *lighting["rank_colors"]]
+    if len(lighting["rank_colors"]) != 5 or any(
+            not isinstance(color, str) or not re.fullmatch(r"[0-9A-Fa-f]{6}", color.lstrip("#"))
+            for color in colors):
+        raise ValueError("config lighting colors must be six-digit hexadecimal strings")
+    return defaults
+
+
 GAMING_IDLE_TIMEOUT = 12.0
 
 
@@ -43,13 +104,13 @@ def configure_windows_startup(install: bool):
     run_key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key_path, 0, winreg.KEY_SET_VALUE) as run_key:
         if install:
-            checkpoint_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "checkpoints", "model_final.npz"))
+            config_path = os.path.abspath(DEFAULT_CONFIG_PATH)
             executable_path = sys.executable
             if os.name == "nt" and os.path.basename(executable_path).lower() == "python.exe":
                 windowless_executable = os.path.join(os.path.dirname(executable_path), "pythonw.exe")
                 if os.path.exists(windowless_executable):
                     executable_path = windowless_executable
-            command = f'"{executable_path}" "{os.path.abspath(__file__)}" --checkpoint "{checkpoint_path}"'
+            command = f'"{executable_path}" "{os.path.abspath(__file__)}" --config "{config_path}"'
             winreg.SetValueEx(run_key, STARTUP_VALUE_NAME, 0, winreg.REG_SZ, command)
             print(f"Installed Windows startup entry: {command}")
         else:
@@ -94,6 +155,7 @@ class LowLatencyInputReader:
     """Asynchronous, non-blocking keystroke reader across Linux and Windows."""
 
     def __init__(self, key_queue: queue.Queue):
+        self.debounce_seconds = 0.015
         self.key_queue = key_queue
         self.running = True
         self._last_key_time = {}
@@ -105,6 +167,7 @@ class LowLatencyInputReader:
 
     def _start_capture(self):
         # 1. Global hook via pynput if available
+        listener_started = False
         try:
             from pynput import keyboard
 
@@ -132,12 +195,16 @@ class LowLatencyInputReader:
             self.listener = keyboard.Listener(on_press=on_press)
             self.listener.daemon = True
             self.listener.start()
+            listener_started = True
         except Exception:
             self.listener = None
 
-        # 2. Worker thread for stdin / msvcrt console input (runs alongside pynput for zero-miss capture)
-        self.thread = threading.Thread(target=self._worker, daemon=True)
-        self.thread.start()
+        # 2. Use console input only when the global hook is unavailable. Running both
+        # sources can deliver the same terminal keystroke twice.
+        self.thread = None
+        if not listener_started:
+            self.thread = threading.Thread(target=self._worker, daemon=True)
+            self.thread.start()
 
     def _enqueue(self, ch: str):
         if not ch:
@@ -172,7 +239,7 @@ class LowLatencyInputReader:
                 sorted_items = sorted(self._last_key_time.items(), key=lambda item: item[1])
                 self._last_key_time = dict(sorted_items[-128:])
             last_t = self._last_key_time.get(ch, 0.0)
-            if (now - last_t) <= 0.015:
+            if (now - last_t) <= self.debounce_seconds:
                 return
             self._last_key_time[ch] = now
         self._put_event(ch)
@@ -265,12 +332,21 @@ class PredictiveKeyLightsApp:
                  context_len: int = 48, show_probs: bool = False,
                  show_attn: bool = False, mock: bool = False,
                  idle_timeout: float = 6.0, demo: bool = False,
-                 seed: str = "", auto_pause_wasd: bool = True):
+                 seed: str = "", auto_pause_wasd: bool = True,
+                 gaming_idle_timeout: float = GAMING_IDLE_TIMEOUT,
+                 queue_size: int = 1024, background_color: str = "FFFFFF",
+                 rank_colors=None, keepalive_hz=None, debounce_ms: float = 15,
+                 wasd_threshold: int = 4, repeat_threshold: int = 5):
         self.top_k = min(max(1, top_k), 5)
         self.brightness = max(0.0, min(1.0, brightness))
         self.show_probs = show_probs
         self.show_attn = show_attn
         self.idle_timeout = idle_timeout
+        self.gaming_idle_timeout = max(0.0, float(gaming_idle_timeout))
+        self.background_color = background_color
+        self.rank_colors = list(rank_colors or DEFAULT_RANK_COLORS)
+        self.wasd_threshold = max(1, int(wasd_threshold))
+        self.repeat_threshold = max(1, int(repeat_threshold))
         self.demo = demo
         self.seed = seed
         self.auto_pause_wasd = auto_pause_wasd
@@ -291,15 +367,19 @@ class PredictiveKeyLightsApp:
                 f"Vocabulary size ({len(vocab)}) exceeds model capacity ({self.model.vocab_size})."
             )
         self.tokenizer = CharTokenizer(vocab=vocab)
-        self.kbd = KeyboardController(profile_name=profile_name, mock=mock)
+        controller_args = {"profile_name": profile_name, "mock": mock}
+        if keepalive_hz is not None:
+            controller_args["keepalive_hz"] = float(keepalive_hz)
+        self.kbd = KeyboardController(**controller_args)
 
-        self.key_queue = queue.Queue(maxsize=1024)
+        self.key_queue = queue.Queue(maxsize=max(1, int(queue_size)))
         self.rolling_buffer = list(seed) if seed else []
         self.last_type_time = time.time()
         self.is_idle = False
 
         try:
             self.input_reader = LowLatencyInputReader(self.key_queue)
+            self.input_reader.debounce_seconds = max(0.0, float(debounce_ms)) / 1000.0
         except Exception:
             self.kbd.close()
             raise
@@ -341,7 +421,7 @@ class PredictiveKeyLightsApp:
             if self.rolling_buffer:
                 self._update_prediction()
             else:
-                self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+                self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background=self.background_color)
                 if self.show_probs:
                     print("[Context: (empty)] -> Start typing to see predictions...", flush=True)
         except BaseException:
@@ -388,11 +468,12 @@ class PredictiveKeyLightsApp:
                                 self.repeat_count = 1
 
                             # Trigger gaming pause: clear context buffer and revert to solid white backlight
-                            if (self.wasd_streak >= 4 or self.repeat_count >= 5):
+                            if (self.wasd_streak >= self.wasd_threshold or
+                                    self.repeat_count >= self.repeat_threshold):
                                 if not self.is_gaming:
                                     self.is_gaming = True
                                     self.rolling_buffer.clear()
-                                    self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+                                    self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background=self.background_color)
                                     if self.show_probs:
                                         print("\n[Gaming Mode] WASD detected. Lighting paused.", flush=True)
 
@@ -428,7 +509,7 @@ class PredictiveKeyLightsApp:
                     if self.rolling_buffer:
                         self._update_prediction()
                     else:
-                        self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+                        self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background=self.background_color)
                         if self.show_probs:
                             print("[Context: (empty)] -> Start typing to see predictions...", flush=True)
                 else:
@@ -441,7 +522,7 @@ class PredictiveKeyLightsApp:
 
     def _handle_idle_iteration(self):
         now = time.time()
-        if self.is_gaming and now - self.last_type_time > GAMING_IDLE_TIMEOUT:
+        if self.is_gaming and now - self.last_type_time > self.gaming_idle_timeout:
             self.is_gaming = False
             self.wasd_streak = 0
             self.repeat_count = 0
@@ -452,14 +533,14 @@ class PredictiveKeyLightsApp:
                 not self.is_idle and
                 now - self.last_type_time > self.idle_timeout):
             self.is_idle = True
-            self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+            self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background=self.background_color)
             if self.show_probs and self.rolling_buffer:
                 ctx = "".join(self.rolling_buffer)[-16:]
                 print(f"[Context: {ctx!r:<16}] -> (Idle)", flush=True)
 
     def _update_prediction(self):
         if not self.rolling_buffer:
-            self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+            self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background=self.background_color)
             return
 
         active_chars = self.rolling_buffer[-self.context_len:]
@@ -467,7 +548,7 @@ class PredictiveKeyLightsApp:
         _, probs = self.model.forward(tokens)
 
         if np.isnan(probs).any() or float(np.nanmax(probs)) < 0.02:
-            self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+            self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background=self.background_color)
             return
 
         valid_candidates = []
@@ -479,7 +560,7 @@ class PredictiveKeyLightsApp:
                     valid_candidates.append((prob, ch, key_name))
 
         if not valid_candidates:
-            self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background="ffffff")
+            self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background=self.background_color)
             return
 
         key_to_best_char = {}
@@ -495,14 +576,14 @@ class PredictiveKeyLightsApp:
         log_items = []
 
         for rank, key_name in enumerate(sorted_keys):
-            color = RANK_COLORS[min(rank, len(RANK_COLORS) - 1)]
+            color = self.rank_colors[min(rank, len(self.rank_colors) - 1)]
             key_colors[key_name] = color
             best_prob, best_ch = key_to_best_char[key_name]
             total_prob = key_to_prob[key_name]
             label = format_prediction_label(best_ch)
             log_items.append(f"#{rank+1}: {label} ({total_prob*100:.1f}%)")
 
-        self.kbd.set_key_colors(key_colors, brightness=self.brightness, clear_others=True, default_background="ffffff")
+        self.kbd.set_key_colors(key_colors, brightness=self.brightness, clear_others=True, default_background=self.background_color)
 
         if self.show_probs:
             ctx = "".join(self.rolling_buffer)[-16:]
@@ -534,18 +615,23 @@ def main():
     parser = argparse.ArgumentParser(description="Predictive Key Lights - Real-time Keystroke Lighting")
     parser.add_argument("--install-startup", action="store_true", help="Start this live predictor automatically when you sign in to Windows")
     parser.add_argument("--uninstall-startup", action="store_true", help="Remove the automatic Windows startup entry")
-    parser.add_argument("--checkpoint", type=str, default="checkpoints/model_final.npz", help="Model checkpoint path")
-    parser.add_argument("--profile", type=str, default="hive75", help="Keyboard profile (default: hive75)")
-    parser.add_argument("--top-k", type=int, default=5, help="Number of predicted keys to illuminate (1-5)")
-    parser.add_argument("--brightness", type=float, default=1.0, help="LED brightness scale (0.0 to 1.0)")
-    parser.add_argument("--context-len", type=int, default=48, help="Context sequence length (default: 48)")
-    parser.add_argument("--show-probs", action="store_true", help="Print live top predictions to terminal")
-    parser.add_argument("--show-attn", action="store_true", help="Visualize causal attention matrix")
+    parser.add_argument("--config", type=str, default=DEFAULT_CONFIG_PATH, help="Runtime JSON configuration path")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Override config checkpoint path")
+    parser.add_argument("--profile", type=str, default=None, help="Override config keyboard profile")
+    parser.add_argument("--top-k", type=int, default=None, help="Override config prediction count (1-5)")
+    parser.add_argument("--brightness", type=float, default=None, help="Override config LED brightness (0.0 to 1.0)")
+    parser.add_argument("--context-len", type=int, default=None, help="Override config context sequence length")
+    parser.add_argument("--show-probs", dest="show_probs", action="store_true", default=None, help="Print live top predictions to terminal")
+    parser.add_argument("--no-show-probs", dest="show_probs", action="store_false", help="Disable probability output for this run")
+    parser.add_argument("--show-attn", dest="show_attn", action="store_true", default=None, help="Visualize causal attention matrix")
+    parser.add_argument("--no-show-attn", dest="show_attn", action="store_false", help="Disable attention output for this run")
     parser.add_argument("--mock", action="store_true", help="Force mock mode (no physical keyboard required)")
-    parser.add_argument("--idle-timeout", type=float, default=6.0, help="Seconds before dimming during typing pause (0 disables dimming; default: 6)")
-    parser.add_argument("--demo", action="store_true", help="Run automated typing demo showing predictions live")
-    parser.add_argument("--seed", type=str, default="", help="Initial text prompt to seed predictions")
-    parser.add_argument("--no-auto-pause-wasd", action="store_true", help="Disable automatic pause on WASD movement / key spam")
+    parser.add_argument("--idle-timeout", type=float, default=None, help="Override config idle timeout (0 disables dimming)")
+    parser.add_argument("--demo", dest="demo", action="store_true", default=None, help="Run automated typing demo showing predictions live")
+    parser.add_argument("--no-demo", dest="demo", action="store_false", help="Disable demo mode for this run")
+    parser.add_argument("--seed", type=str, default=None, help="Initial text prompt to seed predictions")
+    parser.add_argument("--auto-pause-wasd", dest="auto_pause_wasd", action="store_true", default=None, help="Enable automatic pause on WASD movement / key spam")
+    parser.add_argument("--no-auto-pause-wasd", dest="auto_pause_wasd", action="store_false", help="Disable automatic pause on WASD movement / key spam")
     args = parser.parse_args()
 
     if args.install_startup or args.uninstall_startup:
@@ -554,22 +640,42 @@ def main():
         configure_windows_startup(install=args.install_startup)
         return
 
-    if args.idle_timeout < 0:
+    config = load_runtime_config(args.config)
+    runtime = config["runtime"]
+    lighting = config["lighting"]
+    hardware = config["hardware"]
+    checkpoint_path = args.checkpoint or runtime["checkpoint"]
+    if not os.path.isabs(checkpoint_path):
+        checkpoint_path = os.path.join(os.path.dirname(os.path.abspath(args.config)), checkpoint_path)
+    profile_name = args.profile or runtime["profile"]
+    top_k = args.top_k if args.top_k is not None else runtime["top_k"]
+    brightness = args.brightness if args.brightness is not None else runtime["brightness"]
+    context_len = args.context_len if args.context_len is not None else runtime["context_len"]
+    idle_timeout = args.idle_timeout if args.idle_timeout is not None else runtime["idle_timeout"]
+    if idle_timeout < 0:
         parser.error("--idle-timeout must be 0 or greater")
 
     app = PredictiveKeyLightsApp(
-        checkpoint_path=args.checkpoint,
-        profile_name=args.profile,
-        top_k=args.top_k,
-        brightness=args.brightness,
-        context_len=args.context_len,
-        show_probs=args.show_probs,
-        show_attn=args.show_attn,
+        checkpoint_path=checkpoint_path,
+        profile_name=profile_name,
+        top_k=top_k,
+        brightness=brightness,
+        context_len=context_len,
+        show_probs=args.show_probs if args.show_probs is not None else runtime["show_probs"],
+        show_attn=args.show_attn if args.show_attn is not None else runtime["show_attn"],
         mock=args.mock,
-        idle_timeout=args.idle_timeout,
-        demo=args.demo,
-        seed=args.seed,
-        auto_pause_wasd=not args.no_auto_pause_wasd
+        idle_timeout=idle_timeout,
+        demo=args.demo if args.demo is not None else runtime["demo"],
+        seed=args.seed if args.seed is not None else runtime["seed"],
+        auto_pause_wasd=args.auto_pause_wasd if args.auto_pause_wasd is not None else runtime["auto_pause_wasd"],
+        gaming_idle_timeout=runtime["gaming_idle_timeout"],
+        queue_size=runtime["queue_size"],
+        background_color=lighting["background"],
+        rank_colors=lighting["rank_colors"],
+        keepalive_hz=hardware["keepalive_hz"],
+        debounce_ms=runtime["debounce_ms"],
+        wasd_threshold=runtime["wasd_threshold"],
+        repeat_threshold=runtime["repeat_threshold"],
     )
     app.run()
 
