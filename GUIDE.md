@@ -2,49 +2,22 @@
 
 > **A beginner-friendly yet technically rigorous, line-by-line deep dive into building an edge-computing predictive keystroke engine with a custom NumPy Transformer and real-time USB HID hardware LED streaming.**
 
+*Sections 1–2 explain the goal and the full pipeline in plain language. Sections 3–8 walk through each module in code. Section 9 is a reference for bug patterns.*
+
 ---
 
 ## Table of Contents
 
-1. [Absolute Zero — Day 1: What Are We Trying to Achieve?](#1-absolute-zero--day-1-what-are-we-trying-to-achieve)
-   - [1.1 The Big Goal in One Sentence](#11-the-big-goal-in-one-sentence)
-   - [1.2 Why Do We Even Want This?](#12-why-do-we-even-want-this)
-   - [1.3 How Does a Computer "Understand" Words and Letters?](#13-how-does-a-computer-understand-words-and-letters)
-   - [1.4 The Core Task We Train the Model To Do](#14-the-core-task-we-train-the-model-to-do)
-   - [1.5 What Is Inside the "Model"?](#15-what-is-inside-the-model)
-   - [1.6 Why This Tiny Version Exists](#16-why-this-tiny-version-exists)
-   - [1.7 The Physical Twist: Why Bring Hardware into the Loop?](#17-the-physical-twist-why-bring-hardware-into-the-loop)
-   - [1.8 Simple Everyday Analogy](#18-simple-everyday-analogy)
-   - [1.9 What Success Looks Like in This Project](#19-what-success-looks-like-in-this-project)
-2. [System Overview & Philosophy](#2-system-overview--philosophy)
-3. [End-to-End System Pipeline](#3-end-to-end-system-pipeline)
-4. [Module 1: The Neural Engine (`model.py`)](#4-module-1-the-neural-engine-modelpy)
-   - [4.1 Mathematical Foundations & Tensor Shapes](#41-mathematical-foundations--tensor-shapes)
-   - [4.2 The Self-Attention Mechanism Step-by-Step](#42-the-self-attention-mechanism-step-by-step)
-   - [4.3 Line-by-Line Code Walkthrough](#43-line-by-line-code-walkthrough)
-   - [4.4 Complete Analytical Backpropagation Calculus](#44-complete-analytical-backpropagation-calculus)
-5. [Module 2: Dataset Preparation & Training Loop (`train.py`)](#5-module-2-dataset-preparation--training-loop-trainpy)
-   - [5.1 The Sequence-to-Sequence Sliding-Window Formulation](#51-the-sequence-to-sequence-sliding-window-formulation)
-   - [5.2 Line-by-Line Code Walkthrough](#52-line-by-line-code-walkthrough)
-6. [Module 3: Character Tokenization & Symbol Mapping (`key_mapper.py`)](#6-module-3-character-tokenization--symbol-mapping-key_mapperpy)
-   - [6.1 Vocabulary Composition](#61-vocabulary-composition)
-   - [6.2 Line-by-Line Code Walkthrough](#62-line-by-line-code-walkthrough)
-7. [Module 4: Keyboard Geometry & Physical Profiles (`profiles/hive75.json`)](#7-module-4-keyboard-geometry--physical-profiles-profileshive75json)
-   - [7.1 The 75% Compact Layout Anatomy](#71-the-75-compact-layout-anatomy)
-   - [7.2 PCB Matrix Architecture: The 15x6 Profile Grid](#72-pcb-matrix-architecture-the-15x6-profile-grid)
-   - [7.3 Verified Physical Hardware Slot Mapping Table](#73-verified-physical-hardware-slot-mapping-table)
-8. [Module 5: Deterministic Hardware USB HID Controller (`hardware_controller.py`)](#8-module-5-deterministic-hardware-usb-hid-controller-hardware_controllerpy)
-   - [8.1 EVision V2 USB Protocol Deep Dive](#81-evision-v2-usb-protocol-deep-dive)
-   - [8.2 Packet Framing, Checksum & ACK Draining](#82-packet-framing-checksum--ack-draining)
-   - [8.3 The 10 Hz Keepalive Watchdog Engine](#83-the-10-hz-keepalive-watchdog-engine)
-   - [8.4 Line-by-Line Code Walkthrough](#84-line-by-line-code-walkthrough)
-9. [Module 6: Real-Time Ingestion & Predictive Lighting (`predict_and_light.py`)](#9-module-6-real-time-ingestion--predictive-lighting-predict_and_lightpy)
-   - [9.1 The Dual-Engine Ingestion Architecture](#91-the-dual-engine-ingestion-architecture)
-   - [9.2 Auto-Pause WASD / Gaming Detection](#92-auto-pause-wasd--gaming-detection)
-   - [9.3 Context State Machine & Idle Dimming](#93-context-state-machine--idle-dimming)
-   - [9.4 Line-by-Line Code Walkthrough](#94-line-by-line-code-walkthrough)
-10. [Edge Cases, Defenses & Reliability Engineering](#10-edge-cases-defenses--reliability-engineering)
-11. [Command-Line Reference & Cheat Sheet](#11-command-line-reference--cheat-sheet)
+1. [Absolute Zero — Day 1: What Are We Trying To Achieve?](#1-absolute-zero--day-1-what-are-we-trying-to-achieve)
+2. [System Overview & End-to-End Pipeline](#2-system-overview--end-to-end-pipeline)
+3. [Module 1: The Neural Engine (`model.py`)](#3-module-1-the-neural-engine-modelpy)
+4. [Module 2: Dataset Preparation & Training Loop (`train.py`)](#4-module-2-dataset-preparation--training-loop-trainpy)
+5. [Module 3: Character Tokenization & Symbol Mapping (`key_mapper.py`)](#5-module-3-character-tokenization--symbol-mapping-key_mapperpy)
+6. [Module 4: Keyboard Geometry & Physical Profiles (`profiles/hive75.json`)](#6-module-4-keyboard-geometry--physical-profiles-profileshive75json)
+7. [Module 5: Deterministic Hardware USB HID Controller (`hardware_controller.py`)](#7-module-5-deterministic-hardware-usb-hid-controller-hardware_controllerpy)
+8. [Module 6: Real-Time Ingestion & Predictive Lighting (`predict_and_light.py`)](#8-module-6-real-time-ingestion--predictive-lighting-predict_and_lightpy)
+9. [Edge Cases, Defenses & Reliability Engineering](#9-edge-cases-defenses--reliability-engineering)
+10. [Command-Line Reference & Cheat Sheet](#10-command-line-reference--cheat-sheet)
 
 ---
 
@@ -94,11 +67,14 @@ So before we can do any math or machine learning, our first job is to turn chara
 Vocabulary List:
 '<unk>' (unknown) -> 0
 ' '     (space)   -> 1
-'a'               -> 14
-'b'               -> 3
-'c'               -> 4
+'\n'               -> 2
+'\t'               -> 3
+'0'                -> 4
+'a'                -> 14
+'b'                -> 15
+'c'                -> 16
 ...
-'z'               -> 27
+'z'                -> 39
 ```
 
 This list is called our **Vocabulary** (`vocab`).
@@ -134,10 +110,9 @@ Think of the model as a clear box with a few mathematical tables (these tables a
 
 ### 1.6 Why This Tiny Version Exists
 
-Commercial AI models like GPT-4 contain hundreds of billions of numbers, require massive datacenters, and take months to train. Because they are so enormous, nobody can truly see or feel what is happening inside them in real time.
+Zero PyTorch. Pure NumPy. Fully inspectable.
 
 This project is built from scratch with zero heavy dependencies:
-- **Zero PyTorch or TensorFlow**: Written entirely in pure Python and NumPy.
 - **Small and inspectable**: Runs the complete inference path with NumPy arrays and keeps every intermediate attention tensor available for inspection.
 - **100% Transparent**: You can print out the entire attention matrix and watch the model's brain think.
 - **Small training loop**: Trains directly from a text file and reports train and validation loss after every epoch.
@@ -182,9 +157,19 @@ When you launch `python predict_and_light.py --show-probs`:
 Now that we understand the big picture from Day 1, let's look at how every single piece of math, software, and USB hardware works under the hood!
 
 ---
-## 2. System Overview & Philosophy
+## 2. System Overview & End-to-End Pipeline
 
 Keystroke-LLM transforms your physical mechanical keyboard into an active extension of a deep neural network. Instead of passively reading text from a monitor after you type, the system anticipates what you are about to type next and projects probability heatmaps directly beneath your fingertips onto individual mechanical switches in real time.
+
+Here is the whole job in ordinary language: a key is pressed, the program turns that character into a number, the model scores every possible next character, and the hardware controller translates the best scores into colored LED slots. The same path runs again after every keypress. Training happens beforehand; during the live demo, the model only performs the fast forward calculation.
+
+1. **Input capture** receives a physical key without blocking the rest of the program.
+2. **The context buffer** remembers the most recent characters, because one character alone is rarely enough to predict the next one.
+3. **The tokenizer** converts characters such as `t` and space into the integer IDs used by NumPy arrays.
+4. **The Transformer** compares the current context with patterns learned from the training file and returns one score per vocabulary item.
+5. **The ranking step** keeps the most likely valid characters and gives each one a red intensity based on its rank.
+6. **The key mapper and profile** convert a character such as uppercase `A` into the physical switch name `a`, then into the verified LED slot for that keyboard.
+7. **The USB controller** packages the 128-slot RGB buffer into the keyboard's reports and sends them with the required checksum and acknowledgment handling.
 
 ```
 +---------------------------------------------------------------------------------------+
@@ -240,45 +225,17 @@ Keystroke-LLM transforms your physical mechanical keyboard into an active extens
 
 ---
 
-## 3. End-to-End System Pipeline
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as Physical Typist
-    participant Reader as LowLatencyInputReader
-    participant Queue as Key Queue (max 128)
-    participant Buffer as Rolling Buffer (Context)
-    participant Tokenizer as CharTokenizer
-    participant Model as TinyTransformer
-    participant Mapper as Key Mapper & Slot Map
-    participant Driver as KeyboardController
-    participant USB as EVision V2 USB HID (0x320F:0x5055)
-    participant Hardware as Physical LEDs
-
-    User->>Reader: Press key 't'
-    Reader->>Reader: Normalize ('\r'->'\n', DEL->'\b') & Debounce (15ms)
-    Reader->>Queue: put_nowait('t')
-    Queue->>Buffer: pop char & append('t')
-    Buffer->>Tokenizer: encode_char('t') -> [Token IDs]
-    Tokenizer->>Model: forward(token_indices)
-    Model->>Model: Q, K, V Projections & Causal Attention
-    Model->>Model: Residuals + FFN + Output Head + Softmax
-    Model->>Mapper: Next character probabilities P(c | context)
-    Mapper->>Mapper: Select Top-K keys & assign colors (#FF0000...)
-    Mapper->>Driver: set_key_colors(key_colors, bg="ffffff")
-    Driver->>Driver: Fill 128 slots white, overwrite Top-K with red
-    Driver->>USB: Stream 64-byte chunks (CMD 0x12 + 16-bit checksum)
-    USB->>Hardware: Shift registers latch -> LEDs update in real time!
-```
-
----
-
-## 4. Module 1: The Neural Engine (`model.py`)
+## 3. Module 1: The Neural Engine (`model.py`)
 
 `model.py` contains an implementation of an autoregressive, single-layer causal Transformer built from mathematical first principles using NumPy arrays.
 
-### 4.1 Mathematical Foundations & Tensor Shapes
+In practical terms, this file is the part that answers one question: **given the characters seen so far, which vocabulary item should come next?** It has two jobs. During training it adjusts numeric tables so its guesses improve; during prediction it reads those tables and produces probabilities without changing them. The rest of the project can treat it as a box with a simple input (`token_indices`) and two outputs: logits and next-character probabilities.
+
+### 3.1 Mathematical Foundations & Tensor Shapes
+
+This table is the backbone of the module. If you're comfortable with tensor shapes, it is a quick reference; if you're new to them, read it alongside 3.3. Each row records what shape enters an operation and what shape must come out.
+
+For example, with four input characters and a hidden size of 64, the input starts as four integers, becomes a `4 x 64` matrix, stays four rows throughout attention and the feed-forward layer, and ends as a `4 x 98` matrix of vocabulary scores. We use only the last row when making the next-key prediction.
 
 Let:
 - $V$: Vocabulary size ($V = 98$, encompassing uppercase, lowercase, numbers, and symbols).
@@ -309,9 +266,11 @@ Let:
 
 ---
 
-### 4.2 The Self-Attention Mechanism Step-by-Step
+### 3.2 The Self-Attention Mechanism Step-by-Step
 
 Self-attention allows each character in the active typing window to dynamically focus on previous characters to establish linguistic patterns (e.g. noticing that `'q'` is almost universally followed by `'u'`).
+
+The three names in this section are easier to understand as roles than as vocabulary. A **query** asks, “what earlier information would help me here?” A **key** describes what each earlier position contains, and a **value** carries the information that will actually be copied forward. The model compares the current query with earlier keys, turns those comparisons into weights, and blends the earlier values using those weights. The causal mask makes sure a position cannot look into the future and accidentally read the answer during training.
 
 ```
 Input Tokens:   ['t', 'h', 'e', ' ']
@@ -350,7 +309,7 @@ Input Tokens:   ['t', 'h', 'e', ' ']
 
 ---
 
-### 4.3 Line-by-Line Code Walkthrough
+### 3.3 Line-by-Line Code Walkthrough
 
 #### Mathematical Primitives (`model.py`)
 ```python
@@ -428,7 +387,9 @@ def load_checkpoint(cls, filepath):
 
 ---
 
-### 4.4 Complete Analytical Backpropagation Calculus
+### 3.4 Complete Analytical Backpropagation Calculus
+
+> **Advanced section:** Skip this derivation on a first read. It is here as a reference when you want to understand or modify training from first principles.
 
 In `train_step_backprop()`, we compute the exact partial derivatives of the cross-entropy loss $\mathcal{L}$ with respect to every weight matrix in the Transformer.
 
@@ -487,9 +448,13 @@ Parameter weights are updated using the **Adam optimizer** with gradient clippin
 
 ---
 
-## 5. Module 2: Dataset Preparation & Training Loop (`train.py`)
+## 4. Module 2: Dataset Preparation & Training Loop (`train.py`)
 
-### 5.1 The Sequence-to-Sequence Sliding-Window Formulation
+Training is how the numeric tables in `model.py` learn useful patterns. We start with ordinary text, make two nearly identical windows from it, ask the model to predict the second window from the first, measure the mistake, and update the weights. Nothing in this step talks to the keyboard: it is a repeatable offline preparation step that turns text into a checkpoint the live predictor can load.
+
+The important distinction is **input versus target**. If the input is `cat`, the target is `at` for a next-character task. The model is never given the target while it is making the prediction; the target is used afterward to grade the prediction and calculate the update.
+
+### 4.1 The Sequence-to-Sequence Sliding-Window Formulation
 
 Rather than predicting only a single character at the end of a window, the training engine structures character sequences into **full sequence-to-sequence pairs** of length `seq_len`. This trains the transformer across all positions $t \in [1 \dots seq\_len]$ in a single forward/backward pass:
 
@@ -508,7 +473,7 @@ Sample 1:
 
 Every sample allows the causal attention mask to train prefix lengths $1, 2, \dots, seq\_len$ simultaneously, dramatically speeding up convergence and teaching the model both single-letter prefixes and multi-character word completions.
 
-### 5.2 Line-by-Line Code Walkthrough
+### 4.2 Line-by-Line Code Walkthrough
 
 1. **`build_sliding_window_dataset(text, tokenizer, seq_len, stride=3)`**:
    - Encodes raw text into character IDs using `tokenizer.encode(text)`.
@@ -526,9 +491,11 @@ Every sample allows the causal attention mask to train prefix lengths $1, 2, \do
 
 ---
 
-## 6. Module 3: Character Tokenization & Symbol Mapping (`key_mapper.py`)
+## 5. Module 3: Character Tokenization & Symbol Mapping (`key_mapper.py`)
 
-### 6.1 Vocabulary Composition
+This file solves two different naming problems that are easy to mix up. The **tokenizer** gives each character a stable integer ID for the neural model. The **key mapper** gives that same character the physical key name used by the keyboard profile. For example, uppercase `A` is one model token, but it lights the physical lowercase `a` switch because Shift changes the character without changing which switch is pressed.
+
+### 5.1 Vocabulary Composition
 
 The vocabulary has 98 distinct tokens:
 - Indices `0..3`: Special tokens `<unk>`, `' '`, `'\n'`, `'\t'`.
@@ -537,7 +504,7 @@ The vocabulary has 98 distinct tokens:
 - Indices `40..65`: Uppercase letters `'A'` to `'Z'`.
 - Indices `66..97`: Standard punctuation and keyboard symbols (`!@#$%^&*()-_=+[]{}|;:'",.<>/?`~``).
 
-### 6.2 Line-by-Line Code Walkthrough
+### 5.2 Line-by-Line Code Walkthrough
 
 ```python
 CHAR_TO_KEY = {
@@ -562,9 +529,11 @@ CHAR_TO_KEY = {
 
 ---
 
-## 7. Module 4: Keyboard Geometry & Physical Profiles (`profiles/hive75.json`)
+## 6. Module 4: Keyboard Geometry & Physical Profiles (`profiles/hive75.json`)
 
-### 7.1 The 75% Compact Layout Anatomy
+The model predicts characters, but LEDs are not addressed by characters. The keyboard controller needs an exact slot number for each physical switch. This section explains how the JSON profile supplies that translation and why a visually obvious left-to-right key order is not reliable for this particular board.
+
+### 6.1 The 75% Compact Layout Anatomy
 
 The **Kreo Hive 75** profile contains 82 mapped physical keys arranged in six logical rows and fifteen logical columns. The rows are not all full: some positions are empty because the visible keyboard layout is compact.
 
@@ -593,7 +562,7 @@ The **Kreo Hive 75** profile contains 82 mapped physical keys arranged in six lo
 
 ---
 
-### 7.2 PCB Matrix Architecture: The 15x6 Profile Grid
+### 6.2 PCB Matrix Architecture: The 15x6 Profile Grid
 
 During hardware reverse-engineering of the Kreo Hive 75 EVision V2 controller, generic OpenRGB and 104-key drivers produced vertical column shifts because full-size keyboards space function keys differently and route PCB traces in simple row orders.
 
@@ -615,7 +584,7 @@ The JSON file is the source of truth for empty positions and hardware-specific s
 
 ---
 
-### 7.3 Verified Physical Hardware Slot Mapping Table
+### 6.3 Verified Physical Hardware Slot Mapping Table
 
 Below is the verified hardware slot mapping implemented in [`profiles/hive75.json`](profiles/hive75.json):
 
@@ -630,9 +599,13 @@ Below is the verified hardware slot mapping implemented in [`profiles/hive75.jso
 
 ---
 
-## 8. Module 5: Deterministic Hardware USB HID Controller (`hardware_controller.py`)
+## 7. Module 5: Deterministic Hardware USB HID Controller (`hardware_controller.py`)
 
-### 8.1 EVision V2 USB Protocol Deep Dive
+This module is the last step between a prediction and a lit key. It owns the device connection, keeps a complete RGB buffer for all 128 controller slots, converts that buffer into the keyboard's report format, and sends the reports at the cadence the firmware expects. The rest of the application asks for colors by key name; this module handles bytes, checksums, acknowledgments, reconnects, and cleanup.
+
+Start with mock mode. It exercises the same color-buffer API without requiring a keyboard, so you can prove that `w` becomes red and the other slots stay white before debugging USB permissions or device discovery.
+
+### 7.1 EVision V2 USB Protocol Deep Dive
 
 The Kreo Hive 75 operates using an EVision V2 microcontroller (`VID: 0x320F, PID: 0x5055` / `258A:010C`).
 - **Endpoint**: Vendor Usage Page `0xFF1C`, Report ID `0x04`.
@@ -652,7 +625,7 @@ The Kreo Hive 75 operates using an EVision V2 microcontroller (`VID: 0x320F, PID
 +---+---------+---------+------+-------+---------+----------+------+------------+
 ```
 
-### 8.2 Packet Framing, Checksum & ACK Draining
+### 7.2 Packet Framing, Checksum & ACK Draining
 
 Every 64-byte packet requires a 16-bit sum checksum computed over bytes $3 \dots 63$:
 $$\text{Checksum} = \sum_{k=3}^{63} \text{packet}[k] \pmod{65536}$$
@@ -674,13 +647,13 @@ if read_ack:
 ```
 The read has a 20 ms timeout, and failures are handled by marking the HID handle disconnected. If the checksum does not match, the keyboard's USB microcontroller rejects the packet and drops the frame. The code does not promise a fixed end-to-end latency.
 
-### 8.3 The 10 Hz Keepalive Watchdog Engine
+### 7.3 The 10 Hz Keepalive Watchdog Engine
 
 The EVision keyboard firmware features an internal watchdog timer. The controller's EVision path therefore flushes the current frame every $100\text{ ms}$ ($10\text{ Hz}$). For a non-EVision profile, the configured `keepalive_hz` controls the interval; in `hive75.json` that value is `1.0`.
 
 ---
 
-### 8.4 Line-by-Line Code Walkthrough
+### 7.4 Line-by-Line Code Walkthrough
 
 1. **`KeyboardProfile`**:
    - Loads layout geometry, USB VIDs/PIDs, and assigns key slot indices.
@@ -711,9 +684,13 @@ The EVision keyboard firmware features an internal watchdog timer. The controlle
 
 ---
 
-## 9. Module 6: Real-Time Ingestion & Predictive Lighting (`predict_and_light.py`)
+## 8. Module 6: Real-Time Ingestion & Predictive Lighting (`predict_and_light.py`)
 
-### 9.1 The Dual-Engine Ingestion Architecture
+This is the conductor that connects the earlier modules. It receives characters, maintains the rolling context, calls the model, filters and ranks predictions, maps them to physical keys, and asks the controller to redraw the LEDs. It also decides when input is gaming movement rather than text and when idle time should clear the red highlights.
+
+The live loop should stay responsive even when a key is held or the USB device is slow. That is why input capture, the bounded queue, prediction work, and hardware updates are separated instead of putting all of them inside one keyboard callback.
+
+### 8.1 The Dual-Engine Ingestion Architecture
 
 Capturing keystrokes system-wide on modern operating systems introduces multiple platform challenges:
 - Global hooks (such as `WH_KEYBOARD_LL`) can be dropped or blocked by security policies, elevated windows, or console host buffers.
@@ -752,7 +729,7 @@ Typing in Browser/Editor               Typing in Terminal
 
 ---
 
-### 9.2 Auto-Pause WASD / Gaming Detection
+### 8.2 Auto-Pause WASD / Gaming Detection
 
 When gaming (e.g. playing an FPS or movement-heavy game), rapid WASD keystrokes or held key presses would otherwise cause erratic red highlights across the keyboard.
 
@@ -770,7 +747,7 @@ When gaming (e.g. playing an FPS or movement-heavy game), rapid WASD keystrokes 
 
 ---
 
-### 9.3 Context State Machine & Idle Dimming
+### 8.3 Context State Machine & Idle Dimming
 
 To maintain an intuitive lighting experience:
 - **Empty Context State**: At startup or when backspaced to 0 characters, no red predictions are illuminated. The keyboard displays a uniform white backlight, prompting:
@@ -782,7 +759,7 @@ To maintain an intuitive lighting experience:
 
 ---
 
-### 9.4 Line-by-Line Code Walkthrough
+### 8.4 Line-by-Line Code Walkthrough
 
 1. **`render_attention_matrix(tokens, attn_weights)`**:
    - Dynamically slices the attention submatrix matching the input sequence length.
@@ -802,7 +779,9 @@ To maintain an intuitive lighting experience:
 
 ---
 
-## 10. Edge Cases, Defenses & Reliability Engineering
+## 9. Edge Cases, Defenses & Reliability Engineering
+
+This table is a map from a symptom to the code decision that prevents it. Read the first column when something looks wrong, then check the proposed solution in the named module. These are not abstract best practices: each row records a failure mode that can make the demo appear incorrect, hang, or light the wrong physical switch.
 
 | Vulnerability / Edge Case | Failure Mode Before Fix | Engineered Solution |
 | :--- | :--- | :--- |
@@ -829,7 +808,9 @@ To maintain an intuitive lighting experience:
 
 ---
 
-## 11. Command-Line Reference & Cheat Sheet
+## 10. Command-Line Reference & Cheat Sheet
+
+Run the commands from the repository root. A good ground-up progression is: install dependencies, run the test suite, run the predictor in mock mode, train or load a checkpoint, and only then connect the physical keyboard. Every command below is a complete experiment; the comments explain what changes and what output to look for.
 
 ### Environment Setup
 ```powershell

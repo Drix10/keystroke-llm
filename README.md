@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>A tiny language model that turns your keyboard into its own prediction display.</strong><br />
-  Type a character. The model guesses what comes next. The Kreo Hive 75 lights the answer.
+  Start typing a word and the model predicts which keys will come next. The Kreo Hive 75 lights the keys based on confidence.
 </p>
 
 <p align="center">
@@ -31,11 +31,34 @@
 
 ## The Idea
 
-Most language models show their predictions on a screen. Keystroke-LLM puts the prediction under your fingers.
+My keyboard predicts the next key I will press and lights it up.
 
-It watches a rolling window of typed characters, predicts the next character with a small Transformer written from scratch in NumPy, translates likely characters into physical key names, and sends RGB frames directly to the keyboard. Unpredicted keys stay white. The strongest candidate glows red; the next candidates fade through lighter reds.
+It is simple to use but surprisingly involved to build: as I type, the model produces up to five next-key predictions. The most confident key gets the brightest red, the next gets a slightly dimmer red, and so on. It works across words, spaces, punctuation, and numbers.
 
-This is not a text-completion service and it does not replace what you type. It is a visible, physical experiment in how a character-level language model turns context into action.
+### The Model
+
+I trained a character-level Transformer from scratch on 207K characters using pure [**NumPy**](https://www.linkedin.com/company/numpy/) — starting with a 90K corpus, then expanding when it hit a data ceiling:
+
+- Initialize the model's random weights.
+- Use softmax to turn scores into probabilities.
+- Build the math from matrix multiplication and transposes.
+- Add self-attention, a causal mask, residual connections, and feed-forward layers.
+- Compute the loss and repeat the updates until the predictions improve.
+
+### The Keyboard Hardware
+
+Custom LED control on the [**Kreo**](https://www.linkedin.com/company/kreosphere/) Hive 75 was the hard part:
+
+- Reverse-engineer the EVision V2 protocol over USB HID.
+- Send 64-byte reports with a 16-bit checksum.
+- Map LEDs using `slot = (column × 8) + row` rather than visible key order. At first, asking it to light `W` lit `F2`, so I built a probing tool and mapped all 82 switches one by one.
+- Keep sending frames with a 10 Hz daemon; otherwise the board returns to its rainbow animation after about one second.
+
+### Gaming Mode
+
+Gaming mode exists because I was playing [**VALORANT**](https://www.linkedin.com/company/valorantgg/) while training the model. Holding W-A-S-D makes it try to predict English from input like `wwwwadssa`, so the runtime auto-pauses prediction and returns the keyboard to solid white.
+
+Why it matters beyond the novelty: offline accessibility tools, private prediction, language learning, no keystrokes leaving the device.
 
 ## Follow One Keystroke
 
