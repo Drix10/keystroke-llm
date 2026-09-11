@@ -24,6 +24,7 @@ from hardware_controller import (
 from key_mapper import CharTokenizer, char_to_key_name, get_default_vocab
 from model import TinyTransformer
 from predict_and_light import (
+    GAMING_IDLE_TIMEOUT,
     LowLatencyInputReader,
     PredictiveKeyLightsApp,
     render_attention_matrix,
@@ -311,7 +312,24 @@ class TestKeystrokeLLM(unittest.TestCase):
         finally:
             app.cleanup()
 
-    def test_12_idle_timeout_clears_predictions_by_default(self):
+    def test_12_gaming_pause_waits_through_round_break(self):
+        checkpoint_path = "checkpoints/model_final.npz"
+        if not os.path.exists(checkpoint_path):
+            self.skipTest(f"Checkpoint unavailable: {checkpoint_path}")
+        app = PredictiveKeyLightsApp(checkpoint_path=checkpoint_path, mock=True)
+        try:
+            app.is_gaming = True
+            app.last_type_time = time.time() - (GAMING_IDLE_TIMEOUT - 1)
+            app._handle_idle_iteration()
+            self.assertTrue(app.is_gaming)
+
+            app.last_type_time = time.time() - (GAMING_IDLE_TIMEOUT + 1)
+            app._handle_idle_iteration()
+            self.assertFalse(app.is_gaming)
+        finally:
+            app.cleanup()
+
+    def test_13_idle_timeout_clears_predictions_by_default(self):
         checkpoint_path = "checkpoints/model_final.npz"
         if not os.path.exists(checkpoint_path):
             self.skipTest(f"Checkpoint unavailable: {checkpoint_path}")
@@ -327,12 +345,12 @@ class TestKeystrokeLLM(unittest.TestCase):
         finally:
             app.cleanup()
 
-    def test_13_attention_matrix_edge_cases(self):
+    def test_14_attention_matrix_edge_cases(self):
         # Empty inputs should safely return without exception
         render_attention_matrix([], np.array([]))
         render_attention_matrix(["a"], np.array([[1.0]]))
 
-    def test_14_controller_atexit_and_idempotence(self):
+    def test_15_controller_atexit_and_idempotence(self):
         ctrl = KeyboardController(mock=True)
         self.assertTrue(ctrl._registered_atexit)
         self.assertTrue(ctrl._running)
@@ -342,7 +360,7 @@ class TestKeystrokeLLM(unittest.TestCase):
         # Second close must be a no-op and not raise
         ctrl.close()
 
-    def test_15_debounce_cache_pruning(self):
+    def test_16_debounce_cache_pruning(self):
         q = queue.Queue(maxsize=512)
         reader = LowLatencyInputReader(q)
         try:
@@ -354,7 +372,7 @@ class TestKeystrokeLLM(unittest.TestCase):
         finally:
             reader.stop()
 
-    def test_16_controller_lock_rejects_duplicate_owner(self):
+    def test_17_controller_lock_rejects_duplicate_owner(self):
         ctrl = KeyboardController(mock=True)
         try:
             with self.assertRaises(RuntimeError):
@@ -362,7 +380,7 @@ class TestKeystrokeLLM(unittest.TestCase):
         finally:
             ctrl.close()
 
-    def test_17_input_queue_overflow_remains_bounded(self):
+    def test_18_input_queue_overflow_remains_bounded(self):
         q = queue.Queue(maxsize=2)
         reader = LowLatencyInputReader(q)
         try:
@@ -376,7 +394,7 @@ class TestKeystrokeLLM(unittest.TestCase):
         finally:
             reader.stop()
 
-    def test_18_malformed_controller_lock_is_not_removed(self):
+    def test_19_malformed_controller_lock_is_not_removed(self):
         with tempfile.NamedTemporaryFile(mode="w", delete=False) as lock_file:
             lock_file.write("not-a-pid")
             lock_path = lock_file.name
@@ -392,7 +410,7 @@ class TestKeystrokeLLM(unittest.TestCase):
             if os.path.exists(lock_path):
                 os.remove(lock_path)
 
-    def test_19_startup_failure_cleans_up_runtime(self):
+    def test_20_startup_failure_cleans_up_runtime(self):
         checkpoint_path = "checkpoints/model_final.npz"
         if not os.path.exists(checkpoint_path):
             self.skipTest(f"Checkpoint unavailable: {checkpoint_path}")

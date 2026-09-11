@@ -30,6 +30,7 @@ RANK_COLORS = [
 ]
 
 STARTUP_VALUE_NAME = "KeystrokeLLM"
+GAMING_IDLE_TIMEOUT = 12.0
 
 
 def configure_windows_startup(install: bool):
@@ -440,7 +441,7 @@ class PredictiveKeyLightsApp:
 
     def _handle_idle_iteration(self):
         now = time.time()
-        if self.is_gaming and now - self.last_type_time > 1.2:
+        if self.is_gaming and now - self.last_type_time > GAMING_IDLE_TIMEOUT:
             self.is_gaming = False
             self.wasd_streak = 0
             self.repeat_count = 0
