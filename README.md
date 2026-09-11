@@ -27,6 +27,11 @@
   <a href="https://www.linkedin.com/posts/drix10_llm-ondeviceai-mechanicalkeyboards-activity-7503825549148975105-CW31">
     <img alt="LinkedIn engineering discussion" src="https://img.shields.io/badge/LinkedIn-Engineering%20Discussion-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white" />
   </a>
+  <p align="center">
+  <a href="https://huggingface.co/datasets/drix10/keystroke-llm">
+    <img alt="HF Repo" src="https://img.shields.io/badge/HuggingFace-Dataset-0A66C2?style=for-the-badge&logoColor=white" />
+  </a>
+</p>
 </p>
 
 ## The Idea
@@ -37,7 +42,7 @@ It is simple to use but surprisingly involved to build: as I type, the model pro
 
 ### The Model
 
-I trained a character-level Transformer from scratch on 207K characters using pure [**NumPy**](https://www.linkedin.com/company/numpy/) — starting with a 90K corpus, then expanding when it hit a data ceiling:
+I trained a character-level Transformer from scratch on 207K characters using pure [**NumPy**](https://www.linkedin.com/company/numpy/), starting with a 90K corpus, then expanding when it hit a data ceiling:
 
 - Initialize the model's random weights.
 - Use softmax to turn scores into probabilities.
@@ -58,7 +63,9 @@ Custom LED control on the [**Kreo**](https://www.linkedin.com/company/kreosphere
 
 Gaming mode exists because I was playing [**VALORANT**](https://www.linkedin.com/company/valorantgg/) while training the model. Holding W-A-S-D makes it try to predict English from input like `wwwwadssa`, so the runtime auto-pauses prediction and returns the keyboard to solid white.
 
-Why it matters beyond the novelty: offline accessibility tools, private prediction, language learning, no keystrokes leaving the device.
+### Why it matters:
+
+Offline accessibility tools, private prediction, language learning, no keystrokes leaving the device.
 
 ## Follow One Keystroke
 
