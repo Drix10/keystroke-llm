@@ -1,4 +1,4 @@
-# Keystroke-LLM
+<h1 align="center">Keystroke-LLM</h1>
 
 <p align="center">
   <strong>A tiny language model that turns your keyboard into its own prediction display.</strong><br />
