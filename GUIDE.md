@@ -742,7 +742,7 @@ When gaming (e.g. playing an FPS or movement-heavy game), rapid WASD keystrokes 
    - Clears the context buffer.
    - Reverts the entire keyboard to a calm, neutral white backlight (`#FFFFFF`).
 3. **Seamless Resume**:
-   - Resumes predictive lighting as soon as the user presses Enter, Space, or types a non-movement character (e.g. typing in team chat).
+   - Resumes predictive lighting as soon as the user presses Enter or types a non-movement character (e.g. typing in team chat). Game controls such as Space, Shift, and Ctrl remain ignored while paused.
    - Alternatively disengages if typing stops for more than 12 seconds, allowing normal between-round pauses in games.
 
 ---

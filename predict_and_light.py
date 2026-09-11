@@ -397,9 +397,9 @@ class PredictiveKeyLightsApp:
                                         print("\n[Gaming Mode] WASD detected. Lighting paused.", flush=True)
 
                         # Once in gaming mode, ignore movement keys.
-                        # Seamlessly wake up when typing real text (Enter, Space, or non-WASD printable chars).
+                        # Ignore game controls such as Space while paused; resume on Enter or real text.
                         if self.is_gaming:
-                            if ch in ("\n", " ") or (ch.lower() not in ("w", "a", "s", "d") and ch in VALID_PREDICTIVE_CHARS):
+                            if ch == "\n" or (ch.lower() not in ("w", "a", "s", "d") and ch != " " and ch in VALID_PREDICTIVE_CHARS):
                                 self.is_gaming = False
                                 self.wasd_streak = 0
                                 self.repeat_count = 1
