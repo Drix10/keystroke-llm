@@ -5,7 +5,6 @@ import json
 import os
 import queue
 import re
-import signal
 import sys
 import threading
 import time
@@ -28,6 +27,31 @@ DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "
 DEFAULT_RANK_COLORS = [
     "FF0000", "FF3333", "FF5555", "FF7777", "FF9999"
 ]
+DEFAULT_GAMING_HOTKEY = ("esc", "w")
+GAMING_MODE_INDICATOR_KEYS = ("esc", "w", "a", "s", "d")
+GAMING_TOGGLE_EVENT = "\x1d"
+
+
+def validate_gaming_hotkey(hotkey, setting: str = "gaming hotkey"):
+    """Normalize the only hotkey shape supported by both input backends."""
+    if not isinstance(hotkey, (list, tuple)) or len(hotkey) != 2:
+        raise ValueError(f"{setting} must contain Escape and one printable key")
+
+    normalized = []
+    for key in hotkey:
+        if not isinstance(key, str):
+            raise ValueError(f"{setting} must contain Escape and one printable key")
+        name = key.lower()
+        if name == "escape":
+            name = "esc"
+        normalized.append(name)
+
+    if (len(set(normalized)) != 2 or "esc" not in normalized or
+            any(name != "esc" and (len(name) != 1 or not name.isascii() or
+                                     not name.isprintable() or name.isspace())
+                for name in normalized)):
+        raise ValueError(f"{setting} must contain Escape and one printable key")
+    return tuple(normalized)
 
 
 def load_runtime_config(config_path: str = DEFAULT_CONFIG_PATH):
@@ -39,12 +63,9 @@ def load_runtime_config(config_path: str = DEFAULT_CONFIG_PATH):
             "brightness": 1.0,
             "context_len": 48,
             "idle_timeout": 6.0,
-            "gaming_idle_timeout": 12.0,
-            "auto_pause_wasd": True,
             "queue_size": 1024,
             "debounce_ms": 15,
-            "wasd_threshold": 4,
-            "repeat_threshold": 5,
+            "gaming_hotkey": list(DEFAULT_GAMING_HOTKEY),
             "show_probs": False,
             "show_attn": False,
             "demo": False,
@@ -63,22 +84,28 @@ def load_runtime_config(config_path: str = DEFAULT_CONFIG_PATH):
     runtime = defaults["runtime"]
     lighting = defaults["lighting"]
     hardware = defaults["hardware"]
-    integer_ranges = {"top_k": (1, 5), "context_len": (1, None), "queue_size": (1, None),
-                      "wasd_threshold": (1, None), "repeat_threshold": (1, None)}
+    integer_ranges = {"top_k": (1, 5), "context_len": (1, None), "queue_size": (1, None)}
     for key, (minimum, maximum) in integer_ranges.items():
         value = runtime[key]
         if isinstance(value, bool) or not isinstance(value, int) or value < minimum or (maximum and value > maximum):
             raise ValueError(f"config runtime.{key} must be an integer in range {minimum}-{maximum or 'infinity'}")
-    for key in ("brightness", "idle_timeout", "gaming_idle_timeout", "debounce_ms"):
+    for key in ("idle_timeout", "debounce_ms"):
         value = runtime[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
             raise ValueError(f"config runtime.{key} must be a non-negative number")
-    for key in ("auto_pause_wasd", "show_probs", "show_attn", "demo"):
+    brightness = runtime["brightness"]
+    if (isinstance(brightness, bool) or not isinstance(brightness, (int, float)) or
+            not 0 <= brightness <= 1):
+        raise ValueError("config runtime.brightness must be a number from 0 to 1")
+    for key in ("show_probs", "show_attn", "demo"):
         if not isinstance(runtime[key], bool):
             raise ValueError(f"config runtime.{key} must be true or false")
     for key in ("checkpoint", "profile", "seed"):
         if not isinstance(runtime[key], str):
             raise ValueError(f"config runtime.{key} must be a string")
+    runtime["gaming_hotkey"] = list(
+        validate_gaming_hotkey(runtime["gaming_hotkey"], "config runtime.gaming_hotkey")
+    )
     if hardware["keepalive_hz"] is not None and (
             isinstance(hardware["keepalive_hz"], bool) or
             not isinstance(hardware["keepalive_hz"], (int, float)) or
@@ -90,9 +117,6 @@ def load_runtime_config(config_path: str = DEFAULT_CONFIG_PATH):
             for color in colors):
         raise ValueError("config lighting colors must be six-digit hexadecimal strings")
     return defaults
-
-
-GAMING_IDLE_TIMEOUT = 12.0
 
 
 def configure_windows_startup(install: bool):
@@ -149,15 +173,20 @@ def render_attention_matrix(tokens: List[str], attn_weights: np.ndarray):
     print(f"\nLast Character Attention Focus:\n  {focus}\n" + "-" * 40)
 
 
-import _thread
-
-
 class LowLatencyInputReader:
     """Asynchronous, non-blocking keystroke reader across Linux and Windows."""
 
-    def __init__(self, key_queue: queue.Queue):
+    def __init__(self, key_queue: queue.Queue, gaming_hotkey=None):
         self.debounce_seconds = 0.015
         self.key_queue = key_queue
+        self.gaming_hotkey = set(validate_gaming_hotkey(
+            gaming_hotkey if gaming_hotkey is not None else DEFAULT_GAMING_HOTKEY
+        ))
+        self._pressed_keys = set()
+        self._hotkey_active = False
+        self._console_escape_pending = False
+        self._console_escape_time = 0.0
+        self._gaming_mode = False
         self.running = True
         self._last_key_time = {}
         self._debounce_lock = threading.Lock()
@@ -172,28 +201,10 @@ class LowLatencyInputReader:
         try:
             from pynput import keyboard
 
-            def on_press(key):
-                if not self.running:
-                    return False
-                ch = None
-                try:
-                    if hasattr(key, "char") and key.char:
-                        ch = key.char
-                    elif key == keyboard.Key.space:
-                        ch = " "
-                    elif key == keyboard.Key.enter:
-                        ch = "\n"
-                    elif key == keyboard.Key.tab:
-                        ch = "\t"
-                    elif key == keyboard.Key.backspace:
-                        ch = "\b"
-                except Exception:
-                    pass
-
-                if ch:
-                    self._enqueue(ch)
-
-            self.listener = keyboard.Listener(on_press=on_press)
+            self.listener = keyboard.Listener(
+                on_press=lambda key: self._handle_key_press(key, keyboard),
+                on_release=self._handle_key_release,
+            )
             self.listener.daemon = True
             self.listener.start()
             listener_started = True
@@ -207,8 +218,76 @@ class LowLatencyInputReader:
             self.thread = threading.Thread(target=self._worker, daemon=True)
             self.thread.start()
 
+    @staticmethod
+    def _key_name(key):
+        try:
+            if hasattr(key, "char") and key.char:
+                return key.char.lower()
+            key_text = str(key)
+            if key_text.startswith("Key."):
+                return key_text[4:].lower()
+        except Exception:
+            pass
+        return None
+
+    def set_gaming_mode(self, enabled: bool):
+        """Stop queueing ordinary keys while retaining the toggle hotkey."""
+        self._gaming_mode = bool(enabled)
+
+    def _handle_key_press(self, key, keyboard=None):
+        if not self.running:
+            return False
+        key_name = self._key_name(key)
+        if key_name:
+            self._pressed_keys.add(key_name)
+            if self.gaming_hotkey.issubset(self._pressed_keys) and not self._hotkey_active:
+                self._hotkey_active = True
+                self._put_event(GAMING_TOGGLE_EVENT)
+                return
+
+        # Once gaming mode is active, ignore all ordinary global-hook events. The
+        # hotkey check above still runs, so mode can always be turned off.
+        if self._gaming_mode:
+            return
+
+        ch = None
+        try:
+            if hasattr(key, "char") and key.char:
+                ch = key.char
+            elif keyboard is not None and key == keyboard.Key.space:
+                ch = " "
+            elif keyboard is not None and key == keyboard.Key.enter:
+                ch = "\n"
+            elif keyboard is not None and key == keyboard.Key.tab:
+                ch = "\t"
+            elif keyboard is not None and key == keyboard.Key.backspace:
+                ch = "\b"
+        except Exception:
+            pass
+        if ch:
+            self._enqueue(ch)
+
+    def _handle_key_release(self, key):
+        key_name = self._key_name(key)
+        if key_name:
+            self._pressed_keys.discard(key_name)
+        if not self.gaming_hotkey.issubset(self._pressed_keys):
+            self._hotkey_active = False
+
     def _enqueue(self, ch: str):
         if not ch:
+            return
+        if ch == "\x1b":
+            self._console_escape_pending = True
+            self._console_escape_time = time.monotonic()
+            return
+        if self._console_escape_pending:
+            self._console_escape_pending = False
+            if (time.monotonic() - self._console_escape_time <= 0.25 and
+                    {"esc", ch.lower()} == self.gaming_hotkey):
+                self._put_event(GAMING_TOGGLE_EVENT)
+                return
+        if self._gaming_mode:
             return
         # Normalize carriage return to newline and DEL to backspace.
         # Different terminals (PowerShell, Windows Terminal, bash) emit different byte
@@ -218,7 +297,7 @@ class LowLatencyInputReader:
         elif ch == "\x7f":
             ch = "\b"
 
-        # Ctrl+C is intentionally ignored; stop the background process from Task Manager.
+        # Console Ctrl+C is delivered as an OS signal; discard its raw byte here.
         if ch == "\x03":
             return
 
@@ -229,7 +308,7 @@ class LowLatencyInputReader:
         # 15ms debounce window prevents mechanical switch contact bounce from registering twice.
         # MEMORY SAFETY FIX: Prune the debounce dictionary when it exceeds 256 keys so long
         # typing sessions don't leak memory over time.
-        now = time.time()
+        now = time.monotonic()
         with self._debounce_lock:
             if len(self._last_key_time) > 256:
                 sorted_items = sorted(self._last_key_time.items(), key=lambda item: item[1])
@@ -324,28 +403,23 @@ class PredictiveKeyLightsApp:
                  context_len: int = 48, show_probs: bool = False,
                  show_attn: bool = False, mock: bool = False,
                  idle_timeout: float = 6.0, demo: bool = False,
-                 seed: str = "", auto_pause_wasd: bool = True,
-                 gaming_idle_timeout: float = GAMING_IDLE_TIMEOUT,
+                 seed: str = "", gaming_hotkey=None,
                  queue_size: int = 1024, background_color: str = "FFFFFF",
                  rank_colors=None, keepalive_hz=None, debounce_ms: float = 15,
-                 wasd_threshold: int = 4, repeat_threshold: int = 5):
+                 controller_lockfile_path=None):
         self.top_k = min(max(1, top_k), 5)
         self.brightness = max(0.0, min(1.0, brightness))
         self.show_probs = show_probs
         self.show_attn = show_attn
         self.idle_timeout = idle_timeout
-        self.gaming_idle_timeout = max(0.0, float(gaming_idle_timeout))
+        self.gaming_hotkey = list(validate_gaming_hotkey(
+            gaming_hotkey if gaming_hotkey is not None else DEFAULT_GAMING_HOTKEY
+        ))
         self.background_color = background_color
         self.rank_colors = list(rank_colors or DEFAULT_RANK_COLORS)
-        self.wasd_threshold = max(1, int(wasd_threshold))
-        self.repeat_threshold = max(1, int(repeat_threshold))
         self.demo = demo
         self.seed = seed
-        self.auto_pause_wasd = auto_pause_wasd
         self.is_gaming = False
-        self.wasd_streak = 0
-        self.last_char = None
-        self.repeat_count = 0
 
         if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path}. Run train.py first.")
@@ -362,15 +436,17 @@ class PredictiveKeyLightsApp:
         controller_args = {"profile_name": profile_name, "mock": mock}
         if keepalive_hz is not None:
             controller_args["keepalive_hz"] = float(keepalive_hz)
+        if controller_lockfile_path is not None:
+            controller_args["lockfile_path"] = controller_lockfile_path
         self.kbd = KeyboardController(**controller_args)
 
         self.key_queue = queue.Queue(maxsize=max(1, int(queue_size)))
         self.rolling_buffer = list(seed) if seed else []
-        self.last_type_time = time.time()
+        self.last_type_time = time.monotonic()
         self.is_idle = False
 
         try:
-            self.input_reader = LowLatencyInputReader(self.key_queue)
+            self.input_reader = LowLatencyInputReader(self.key_queue, self.gaming_hotkey)
             self.input_reader.debounce_seconds = max(0.0, float(debounce_ms)) / 1000.0
         except Exception:
             self.kbd.close()
@@ -425,10 +501,10 @@ class PredictiveKeyLightsApp:
                 try:
                     # BATCH QUEUE DRAINING:
                     # If the user types rapidly (e.g. 80-120 WPM burst), processing keystrokes
-                    # one-by-one would introduce a backlog queue. Instead, we block for 5ms on the
+                    # one-by-one would introduce a backlog queue. Instead, we block for up to 50ms on the
                     # first character, then drain all pending strokes immediately. Forward inference
                     # and USB lighting only execute once for the newest tail character.
-                    first_ch = self.key_queue.get(timeout=0.005)
+                    first_ch = self.key_queue.get(timeout=0.05)
                     new_chars = [first_ch]
                     while not self.key_queue.empty():
                         try:
@@ -439,48 +515,15 @@ class PredictiveKeyLightsApp:
                     new_chars = []
 
                 if new_chars:
-                    self.last_type_time = time.time()
+                    self.last_type_time = time.monotonic()
                     self.is_idle = False
                     for ch in new_chars:
-                        # GAMING AUTO-PAUSE STATE MACHINE:
-                        # When playing an FPS or movement-heavy game, spamming W/A/S/D or holding
-                        # strafe keys causes a language model to hallucinate random predictions,
-                        # turning the keyboard into an annoying disco strobe.
-                        # We detect movement patterns: >= 4 WASD keys or >= 5 identical repeats.
-                        if self.auto_pause_wasd:
-                            if ch.lower() in ("w", "a", "s", "d"):
-                                self.wasd_streak += 1
-                            else:
-                                self.wasd_streak = 0
+                        if ch == GAMING_TOGGLE_EVENT:
+                            self._toggle_gaming_mode()
+                            continue
 
-                            if ch == self.last_char and ch not in (" ", "\n", "\b"):
-                                self.repeat_count += 1
-                            else:
-                                self.last_char = ch
-                                self.repeat_count = 1
-
-                            # Trigger gaming pause: clear context buffer and revert to solid white backlight
-                            if (self.wasd_streak >= self.wasd_threshold or
-                                    self.repeat_count >= self.repeat_threshold):
-                                if not self.is_gaming:
-                                    self.is_gaming = True
-                                    self.rolling_buffer.clear()
-                                    self.kbd.set_key_colors({}, brightness=self.brightness, clear_others=True, default_background=self.background_color)
-                                    if self.show_probs:
-                                        print("\n[Gaming Mode] WASD detected. Lighting paused.", flush=True)
-
-                        # Once in gaming mode, ignore movement keys.
-                        # Ignore game controls such as Space while paused; resume on Enter or real text.
                         if self.is_gaming:
-                            if ch == "\n" or (ch.lower() not in ("w", "a", "s", "d") and ch != " " and ch in VALID_PREDICTIVE_CHARS):
-                                self.is_gaming = False
-                                self.wasd_streak = 0
-                                self.repeat_count = 1
-                                self.rolling_buffer.clear()
-                                if self.show_probs:
-                                    print("[Typing Resumed] Predictions active.", flush=True)
-                            else:
-                                continue
+                            continue
 
                         if ch == "\b":
                             if self.rolling_buffer:
@@ -512,15 +555,26 @@ class PredictiveKeyLightsApp:
         finally:
             self.cleanup()
 
-    def _handle_idle_iteration(self):
-        now = time.time()
-        if self.is_gaming and now - self.last_type_time > self.gaming_idle_timeout:
-            self.is_gaming = False
-            self.wasd_streak = 0
-            self.repeat_count = 0
-            if self.show_probs:
-                print("[Typing Resumed] Idle timeout.", flush=True)
+    def _toggle_gaming_mode(self):
+        self.is_gaming = not self.is_gaming
+        self.input_reader.set_gaming_mode(self.is_gaming)
+        self.rolling_buffer.clear()
+        self.is_idle = False
+        self.last_type_time = time.monotonic()
+        indicator_colors = (
+            {key: self.rank_colors[index] for index, key in enumerate(GAMING_MODE_INDICATOR_KEYS)}
+            if self.is_gaming else {}
+        )
+        self.kbd.set_key_colors(indicator_colors, brightness=self.brightness,
+                                clear_others=True, default_background=self.background_color)
+        if self.show_probs:
+            state = "enabled" if self.is_gaming else "disabled"
+            print(f"\n[Gaming Mode] {state} via hotkey.", flush=True)
 
+    def _handle_idle_iteration(self):
+        if self.is_gaming:
+            return
+        now = time.monotonic()
         if (self.idle_timeout > 0 and
                 not self.is_idle and
                 now - self.last_type_time > self.idle_timeout):
@@ -604,7 +658,6 @@ class PredictiveKeyLightsApp:
 def main():
     if os.name == "nt":
         os.system("")  # Enable Windows virtual terminal / ANSI escape sequences
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
     parser = argparse.ArgumentParser(description="Predictive Key Lights - Real-time Keystroke Lighting")
     parser.add_argument("--install-startup", action="store_true", help="Start this live predictor automatically when you sign in to Windows")
     parser.add_argument("--uninstall-startup", action="store_true", help="Remove the automatic Windows startup entry")
@@ -623,8 +676,7 @@ def main():
     parser.add_argument("--demo", dest="demo", action="store_true", default=None, help="Run automated typing demo showing predictions live")
     parser.add_argument("--no-demo", dest="demo", action="store_false", help="Disable demo mode for this run")
     parser.add_argument("--seed", type=str, default=None, help="Initial text prompt to seed predictions")
-    parser.add_argument("--auto-pause-wasd", dest="auto_pause_wasd", action="store_true", default=None, help="Enable automatic pause on WASD movement / key spam")
-    parser.add_argument("--no-auto-pause-wasd", dest="auto_pause_wasd", action="store_false", help="Disable automatic pause on WASD movement / key spam")
+    parser.add_argument("--gaming-hotkey", nargs=2, metavar=("KEY1", "KEY2"), default=None, help="Override the two-key gaming toggle hotkey")
     args = parser.parse_args()
 
     if args.install_startup or args.uninstall_startup:
@@ -648,6 +700,14 @@ def main():
     if idle_timeout < 0:
         parser.error("--idle-timeout must be 0 or greater")
 
+    try:
+        gaming_hotkey = validate_gaming_hotkey(
+            args.gaming_hotkey if args.gaming_hotkey is not None else runtime["gaming_hotkey"],
+            "--gaming-hotkey" if args.gaming_hotkey is not None else "config runtime.gaming_hotkey",
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+
     app = PredictiveKeyLightsApp(
         checkpoint_path=checkpoint_path,
         profile_name=profile_name,
@@ -660,15 +720,12 @@ def main():
         idle_timeout=idle_timeout,
         demo=args.demo if args.demo is not None else runtime["demo"],
         seed=args.seed if args.seed is not None else runtime["seed"],
-        auto_pause_wasd=args.auto_pause_wasd if args.auto_pause_wasd is not None else runtime["auto_pause_wasd"],
-        gaming_idle_timeout=runtime["gaming_idle_timeout"],
+        gaming_hotkey=gaming_hotkey,
         queue_size=runtime["queue_size"],
         background_color=lighting["background"],
         rank_colors=lighting["rank_colors"],
         keepalive_hz=hardware["keepalive_hz"],
         debounce_ms=runtime["debounce_ms"],
-        wasd_threshold=runtime["wasd_threshold"],
-        repeat_threshold=runtime["repeat_threshold"],
     )
     app.run()
 

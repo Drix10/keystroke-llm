@@ -688,9 +688,9 @@ The EVision keyboard firmware features an internal watchdog timer. The controlle
 
 ### 8.0 Runtime Configuration
 
-The editable [`config.json`](README.md) file is the single source for user-facing runtime settings. It contains lighting colors, the white background, brightness, prediction count, idle and gaming timers, WASD thresholds, debounce timing, queue size, checkpoint, profile, and optional output flags. Command-line values override the file for one run; the Windows startup command loads the file directly.
+The editable [`config.json`](README.md) file is the single source for user-facing runtime settings. It contains lighting colors, the white background, brightness, prediction count, idle timer, gaming toggle hotkey, debounce timing, queue size, checkpoint, profile, and optional output flags. `runtime.brightness` is a per-channel RGB multiplier from `0.0` (off) to `1.0` (full intensity). The five `lighting.rank_colors` entries are separate shades for prediction ranks 1–5, not global brightness levels. Command-line values override the file for one run; the Windows startup command loads the file directly.
 
-This is the conductor that connects the earlier modules. It receives characters, maintains the rolling context, calls the model, filters and ranks predictions, maps them to physical keys, and asks the controller to redraw the LEDs. It also decides when input is gaming movement rather than text and when idle time should clear the red highlights.
+This is the conductor that connects the earlier modules. It receives characters, maintains the rolling context, calls the model, filters and ranks predictions, maps them to physical keys, and asks the controller to redraw the LEDs. It also provides an explicit gaming-mode toggle and clears red highlights after idle time.
 
 The live loop should stay responsive even when a key is held or the USB device is slow. That is why input capture, the bounded queue, prediction work, and hardware updates are separated instead of putting all of them inside one keyboard callback.
 
@@ -733,21 +733,13 @@ Typing in Browser/Editor               Typing in Terminal
 
 ---
 
-### 8.2 Auto-Pause WASD / Gaming Detection
+### 8.2 Gaming Mode Toggle
 
-When gaming (e.g. playing an FPS or movement-heavy game), rapid WASD keystrokes or held key presses would otherwise cause erratic red highlights across the keyboard.
+When gaming (for example, in an FPS), movement and repeated keys should not drive language predictions. The runtime therefore uses a deliberate `Esc + W` toggle rather than trying to infer when a game has started.
 
-`PredictiveKeyLightsApp` features an automatic gaming state detector:
-1. **Trigger Condition**:
-   - $\ge 4$ consecutive keystrokes within `{'w', 'a', 's', 'd'}`.
-   - $\ge 5$ consecutive repetitions of any non-space key.
-2. **Behavior on Trigger**:
-   - Switches `is_gaming = True`.
-   - Clears the context buffer.
-   - Reverts the entire keyboard to a calm, neutral white backlight (`#FFFFFF`).
-3. **Seamless Resume**:
-   - Resumes predictive lighting as soon as the user presses Enter or types a non-movement character (e.g. typing in team chat). Game controls such as Space, Shift, and Ctrl remain ignored while paused.
-   - Alternatively disengages if typing stops for more than 12 seconds, allowing normal between-round pauses in games.
+`LowLatencyInputReader` tracks keys pressed by the global hook and emits one toggle event only when both hotkey keys are down. It does not emit another event until either key is released, preventing key-repeat from toggling repeatedly. While enabled it discards ordinary global-hook events before they enter the queue, so game input performs no model inference or LED redraws. The console fallback recognizes `Esc` followed by the configured second key within 250 ms, because terminals cannot report simultaneous key state.
+
+On each toggle, `PredictiveKeyLightsApp` clears the context. While gaming mode is enabled, `Esc`, `W`, `A`, `S`, and `D` display rank colors 1–5 as a persistent indicator and captured text is ignored; press the same hotkey to resume predictions and restore the neutral white backlight. Configure `runtime.gaming_hotkey` as `Esc` plus one printable ASCII key (for example, `["esc", "w"]`), or override it for one run with `--gaming-hotkey esc w`.
 
 ---
 
@@ -770,9 +762,9 @@ To maintain an intuitive lighting experience:
    - Renormalizes attention rows so they sum to 100% before displaying the ASCII attention heatmap.
 2. **`LowLatencyInputReader`**:
    - `_start_capture()` initializes the non-blocking global hook.
-   - `_enqueue(ch)` normalizes carriage returns (`\r` $\to$ `\n`), normalizes delete keys (`\x7f` $\to$ `\b`), intercepts Ctrl+C (`\x03`) to invoke `_thread.interrupt_main()`, filters control codes, debounces duplicate events (15ms window), and enqueues the token.
+   - `_enqueue(ch)` normalizes carriage returns (`\r` $\to$ `\n`), normalizes delete keys (`\x7f` $\to$ `\b`), discards the raw Ctrl+C byte because the operating system delivers Ctrl+C as a signal, filters control codes, debounces duplicate events (15ms window), and enqueues the token.
 3. **`PredictiveKeyLightsApp.run()`**:
-   - Uses `self.key_queue.get(timeout=0.005)` so the worker can process bursts while still checking idle and gaming timers.
+   - Uses `self.key_queue.get(timeout=0.05)`: queued input wakes it immediately, while the timeout keeps idle-state checks responsive without a busy polling loop.
    - Consumes characters from `self.key_queue`, updates the rolling buffer, manages idle timeouts, and calls `_update_prediction()`.
 4. **`_update_prediction()`**:
    - Evaluates the rolling buffer through `self.model.forward()`.
@@ -793,7 +785,7 @@ This table is a map from a symptom to the code decision that prevents it. Read t
 | **Missing Background Keys** | Background fill only looped over `slot_map.values()`. Keys like `f`, `j`, `p`, `=`, `[`, `]`, `f11`, `ctrl`, `shift`, `del` stayed dark. | Populates the entire 128-slot buffer unconditionally: `bytearray([bg_r, bg_g, bg_b] * num_slots)`. |
 | **Physical Matrix Offset** | A generic 104-key column formula shifted letters onto function and number rows (`W` $\to$ `1`, `T` $\to$ `F4`, `H` $\to$ `Y`). | Mapped all 82 switches to the verified slots in `profiles/hive75.json`. |
 | **Keystroke Hook Freezing** | Waiting on a hook thread could prevent the console reader from running. | Starts `pynput` with non-blocking `start()` and runs the platform console reader in its own worker thread. |
-| **Ctrl+C Trapping** | `msvcrt.getch()` intercepted `\x03`, preventing process termination via Ctrl+C. | Intercepts byte `b'\x03'` in console poller and invokes `_thread.interrupt_main()`. |
+| **Ctrl+C Trapping** | The console poller could treat Ctrl+C as application input. | Drops raw `b'\x03'`; the operating system's normal Ctrl+C signal handler remains responsible for shutdown. |
 | **Carriage Return / DEL Corruption** | `\r` and `\x7f` treated as `<unk>` or failing to delete context on some terminals. | Normalizes `\r` to `\n` and `\x7f` to `\b` in `_enqueue()` before control filtering. |
 | **Context Length Overflow** | `--context-len` greater than model's `seq_len` caused shape assertion crash. | Clamps `context_len = min(context_len, model.seq_len)` in `__init__`, and `forward()` auto-slices long sequences. |
 | **Attention Shape & Renormalization** | Slicing submatrix without row-sum normalization produced sums $< 100\%$. | Dynamically aligns slice and renormalizes rows with `np.divide()` so rows sum to 100%. |

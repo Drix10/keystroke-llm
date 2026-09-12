@@ -24,16 +24,24 @@ from hardware_controller import (
 from key_mapper import CharTokenizer, VALID_PREDICTIVE_CHARS, char_to_key_name, get_default_vocab
 from model import TinyTransformer
 from predict_and_light import (
-    GAMING_IDLE_TIMEOUT,
+    GAMING_TOGGLE_EVENT,
     LowLatencyInputReader,
     PredictiveKeyLightsApp,
     load_runtime_config,
     render_attention_matrix,
+    validate_gaming_hotkey,
 )
 from train import build_sliding_window_dataset
 
 
 class TestKeystrokeLLM(unittest.TestCase):
+    def setUp(self):
+        self._lock_dir = tempfile.TemporaryDirectory()
+        self._controller_lockfile = os.path.join(self._lock_dir.name, "controller.lock")
+
+    def tearDown(self):
+        self._lock_dir.cleanup()
+
 
     def test_01_model_and_tokenizer(self):
         vocab = get_default_vocab()
@@ -93,7 +101,7 @@ class TestKeystrokeLLM(unittest.TestCase):
             self.assertTrue(0 <= profile.slot_map[alias] < 128)
 
     def test_03_hardware_controller_mock(self):
-        ctrl = KeyboardController(mock=True)
+        ctrl = KeyboardController(mock=True, lockfile_path=self._controller_lockfile)
         try:
             self.assertTrue(ctrl.mock)
             # Verify full background fill
@@ -198,7 +206,8 @@ class TestKeystrokeLLM(unittest.TestCase):
             brightness=1.0,
             context_len=12,
             show_probs=False,
-            show_attn=False
+            show_attn=False,
+            controller_lockfile_path=self._controller_lockfile,
         )
         try:
             class DeterministicModel:
@@ -280,7 +289,7 @@ class TestKeystrokeLLM(unittest.TestCase):
             if os.path.exists(tmp_ckpt):
                 os.remove(tmp_ckpt)
 
-    def test_11_gaming_wasd_auto_pause_transitions(self):
+    def test_11_gaming_hotkey_toggles_mode(self):
         checkpoint_path = "checkpoints/model_final.npz"
         if not os.path.exists(checkpoint_path):
             self.skipTest(f"Checkpoint unavailable: {checkpoint_path}")
@@ -288,76 +297,96 @@ class TestKeystrokeLLM(unittest.TestCase):
             checkpoint_path=checkpoint_path,
             mock=True,
             show_probs=False,
-            auto_pause_wasd=True
+            controller_lockfile_path=self._controller_lockfile,
         )
         try:
-            # Simulate gaming WASD streak
-            for ch in ["w", "a", "s", "d"]:
-                app.key_queue.put(ch)
-
-            # Process queue manually or via run loop step
-            while not app.key_queue.empty():
-                ch = app.key_queue.get()
-                if ch.lower() in ("w", "a", "s", "d"):
-                    app.wasd_streak += 1
-                if app.wasd_streak >= 4:
-                    app.is_gaming = True
-                    app.rolling_buffer.clear()
+            app._toggle_gaming_mode()
             self.assertTrue(app.is_gaming)
             self.assertEqual(len(app.rolling_buffer), 0)
+            self.assertEqual(app.kbd._current_colors, {
+                "esc": app.rank_colors[0], "w": app.rank_colors[1],
+                "a": app.rank_colors[2], "s": app.rank_colors[3],
+                "d": app.rank_colors[4],
+            })
 
-            # Resume by typing regular text
-            resume_char = "h"
-            if ch in ("\n", " ") or (resume_char.lower() not in ("w", "a", "s", "d")):
-                app.is_gaming = False
-                app.wasd_streak = 0
-                app.rolling_buffer.append(resume_char)
+            app._toggle_gaming_mode()
             self.assertFalse(app.is_gaming)
-            self.assertEqual(app.rolling_buffer, ["h"])
+            self.assertEqual(app.kbd._current_colors, {})
         finally:
             app.cleanup()
 
-    def test_12_gaming_pause_waits_through_round_break(self):
+    def test_12_gaming_mode_ignores_normal_input(self):
         checkpoint_path = "checkpoints/model_final.npz"
         if not os.path.exists(checkpoint_path):
             self.skipTest(f"Checkpoint unavailable: {checkpoint_path}")
-        app = PredictiveKeyLightsApp(checkpoint_path=checkpoint_path, mock=True)
+        app = PredictiveKeyLightsApp(checkpoint_path=checkpoint_path, mock=True, controller_lockfile_path=self._controller_lockfile)
         try:
             app.is_gaming = True
-            app.last_type_time = time.time() - (GAMING_IDLE_TIMEOUT - 1)
-            app._handle_idle_iteration()
+            app.rolling_buffer = list("hello")
+            # The run loop ignores ordinary events while the explicit toggle is on.
+            ch = "w"
+            if not app.is_gaming:
+                app.rolling_buffer.append(ch)
             self.assertTrue(app.is_gaming)
-
-            app.last_type_time = time.time() - (GAMING_IDLE_TIMEOUT + 1)
-            app._handle_idle_iteration()
-            self.assertFalse(app.is_gaming)
+            self.assertEqual(app.rolling_buffer, list("hello"))
         finally:
             app.cleanup()
 
-    def test_13_space_does_not_exit_gaming_mode(self):
-        checkpoint_path = "checkpoints/model_final.npz"
-        if not os.path.exists(checkpoint_path):
-            self.skipTest(f"Checkpoint unavailable: {checkpoint_path}")
-        app = PredictiveKeyLightsApp(checkpoint_path=checkpoint_path, mock=True)
+    def test_13_escape_w_hotkey_emits_toggle_event(self):
+        key_queue = queue.Queue()
+        reader = LowLatencyInputReader(key_queue)
         try:
-            app.is_gaming = True
-            app.key_queue.put(" ")
-            ch = app.key_queue.get_nowait()
-            if ch == "\n" or (ch.lower() not in ("w", "a", "s", "d") and ch != " " and ch in VALID_PREDICTIVE_CHARS):
-                app.is_gaming = False
-            self.assertTrue(app.is_gaming)
+            reader._enqueue("\x1b")
+            reader._enqueue("w")
+            self.assertEqual(key_queue.get_nowait(), GAMING_TOGGLE_EVENT)
+
+            # Escape is only paired with the next key for a short console window.
+            reader._enqueue("\x1b")
+            reader._console_escape_time -= 1.0
+            reader._enqueue("w")
+            self.assertEqual(key_queue.get_nowait(), "w")
         finally:
-            app.cleanup()
+            reader.stop()
+
+    def test_13b_hotkey_latch_and_gaming_suppression(self):
+        class FakeKey:
+            def __init__(self, char=None, name=None):
+                self.char = char
+                self.name = name
+
+            def __str__(self):
+                return f"Key.{self.name}" if self.name else self.char
+
+        key_queue = queue.Queue()
+        reader = LowLatencyInputReader(key_queue)
+        try:
+            esc = FakeKey(name="esc")
+            w = FakeKey(char="w")
+            reader._handle_key_press(esc)
+            reader._handle_key_press(w)
+            self.assertEqual(key_queue.get_nowait(), GAMING_TOGGLE_EVENT)
+            reader.set_gaming_mode(True)
+
+            # Key repeat while both keys are held must not emit a second toggle.
+            reader._handle_key_press(w)
+            self.assertTrue(key_queue.empty())
+
+            reader._handle_key_release(w)
+            reader._handle_key_release(esc)
+            reader._handle_key_press(FakeKey(char="a"))
+            self.assertTrue(key_queue.empty())
+        finally:
+            reader.stop()
 
     def test_14_idle_timeout_clears_predictions_by_default(self):
         checkpoint_path = "checkpoints/model_final.npz"
         if not os.path.exists(checkpoint_path):
             self.skipTest(f"Checkpoint unavailable: {checkpoint_path}")
-        app = PredictiveKeyLightsApp(checkpoint_path=checkpoint_path, mock=True)
+        app = PredictiveKeyLightsApp(checkpoint_path=checkpoint_path, mock=True, controller_lockfile_path=self._controller_lockfile)
         try:
             self.assertEqual(app.idle_timeout, 6.0)
             app.rolling_buffer = list("hello")
-            app.last_type_time = time.time() - 60
+            app.last_type_time = time.monotonic() - 60
             app._update_prediction()
             app._handle_idle_iteration()
             self.assertTrue(app.is_idle)
@@ -371,7 +400,7 @@ class TestKeystrokeLLM(unittest.TestCase):
         render_attention_matrix(["a"], np.array([[1.0]]))
 
     def test_16_controller_atexit_and_idempotence(self):
-        ctrl = KeyboardController(mock=True)
+        ctrl = KeyboardController(mock=True, lockfile_path=self._controller_lockfile)
         self.assertTrue(ctrl._registered_atexit)
         self.assertTrue(ctrl._running)
         ctrl.close()
@@ -393,10 +422,10 @@ class TestKeystrokeLLM(unittest.TestCase):
             reader.stop()
 
     def test_18_controller_lock_rejects_duplicate_owner(self):
-        ctrl = KeyboardController(mock=True)
+        ctrl = KeyboardController(mock=True, lockfile_path=self._controller_lockfile)
         try:
             with self.assertRaises(RuntimeError):
-                KeyboardController(mock=True)
+                KeyboardController(mock=True, lockfile_path=self._controller_lockfile)
         finally:
             ctrl.close()
 
@@ -434,7 +463,7 @@ class TestKeystrokeLLM(unittest.TestCase):
         checkpoint_path = "checkpoints/model_final.npz"
         if not os.path.exists(checkpoint_path):
             self.skipTest(f"Checkpoint unavailable: {checkpoint_path}")
-        app = PredictiveKeyLightsApp(checkpoint_path=checkpoint_path, mock=True, seed="hello")
+        app = PredictiveKeyLightsApp(checkpoint_path=checkpoint_path, mock=True, seed="hello", controller_lockfile_path=self._controller_lockfile)
         try:
             with mock.patch.object(app, "_update_prediction", side_effect=RuntimeError("startup failure")):
                 with self.assertRaisesRegex(RuntimeError, "startup failure"):
@@ -447,11 +476,11 @@ class TestKeystrokeLLM(unittest.TestCase):
 
     def test_22_runtime_config_overrides_defaults(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as config_file:
-            config_file.write('{"runtime": {"gaming_idle_timeout": 9}, "lighting": {"background": "101010", "rank_colors": ["100000", "200000", "300000", "400000", "500000"]}}')
+            config_file.write('{"runtime": {"gaming_hotkey": ["esc", "g"]}, "lighting": {"background": "101010", "rank_colors": ["100000", "200000", "300000", "400000", "500000"]}}')
             config_path = config_file.name
         try:
             config = load_runtime_config(config_path)
-            self.assertEqual(config["runtime"]["gaming_idle_timeout"], 9)
+            self.assertEqual(config["runtime"]["gaming_hotkey"], ["esc", "g"])
             self.assertEqual(config["lighting"]["background"], "101010")
             self.assertEqual(len(config["lighting"]["rank_colors"]), 5)
             self.assertEqual(config["runtime"]["top_k"], 5)
@@ -461,6 +490,21 @@ class TestKeystrokeLLM(unittest.TestCase):
     def test_23_runtime_config_rejects_invalid_values(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as config_file:
             config_file.write('{"runtime": {"brightness": 2}, "lighting": {"rank_colors": ["GGGGGG", "000000", "000000", "000000", "000000"]}}')
+            config_path = config_file.name
+        try:
+            with self.assertRaises(ValueError):
+                load_runtime_config(config_path)
+        finally:
+            os.remove(config_path)
+
+    def test_23b_gaming_hotkey_validation_requires_esc_plus_one_key(self):
+        self.assertEqual(validate_gaming_hotkey(["escape", "W"]), ("esc", "w"))
+        for malformed in (["esc", "w w"], ["w", "w"], ["ctrl", "w"], ["esc", " "], ["esc", "é"]):
+            with self.assertRaises(ValueError):
+                validate_gaming_hotkey(malformed)
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as config_file:
+            config_file.write('{"runtime": {"gaming_hotkey": ["esc", "esc"]}}')
             config_path = config_file.name
         try:
             with self.assertRaises(ValueError):

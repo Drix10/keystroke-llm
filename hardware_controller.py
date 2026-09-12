@@ -164,13 +164,26 @@ def _is_pid_running(pid: int) -> bool:
     if os.name == "nt":
         try:
             import ctypes
+            from ctypes import wintypes
+
             kernel32 = ctypes.windll.kernel32
             SYNCHRONIZE = 0x00100000
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+            kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            kernel32.CloseHandle.restype = wintypes.BOOL
             h = kernel32.OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
             if h:
-                kernel32.CloseHandle(h)
-                return True
+                try:
+                    exit_code = wintypes.DWORD()
+                    return bool(kernel32.GetExitCodeProcess(h, ctypes.byref(exit_code)) and
+                                exit_code.value == STILL_ACTIVE)
+                finally:
+                    kernel32.CloseHandle(h)
         except Exception:
             pass
         return False
@@ -230,7 +243,8 @@ class KeyboardController:
         getattr(errno, "ESHUTDOWN", 108),
     })
 
-    def __init__(self, profile_name: str = "hive75", mock: bool = False, keepalive_hz: Optional[float] = None):
+    def __init__(self, profile_name: str = "hive75", mock: bool = False,
+                 keepalive_hz: Optional[float] = None, lockfile_path: Optional[str] = None):
         self.profile = load_profile(profile_name)
         self.mock = mock
         self.keepalive_hz = self.profile.keepalive_hz if keepalive_hz is None else keepalive_hz
@@ -248,7 +262,7 @@ class KeyboardController:
         self._last_reconnect_attempt = 0.0
         self._keepalive_thread: Optional[threading.Thread] = None
 
-        self.lockfile_path = os.path.join(tempfile.gettempdir(), "keystroke_llm.lock")
+        self.lockfile_path = lockfile_path or os.path.join(tempfile.gettempdir(), "keystroke_llm.lock")
         self._lock_held = False
         self._acquire_lock()
 
@@ -563,7 +577,7 @@ class KeyboardController:
                 else:
                     # Single reconnection owner: retry connection sequentially every 2.0s
                     # without racing against worker threads.
-                    now = time.time()
+                    now = time.monotonic()
                     if now - self._last_reconnect_attempt > 2.0:
                         self._last_reconnect_attempt = now
                         self._connect()

@@ -61,7 +61,7 @@ Custom LED control on the [**Kreo**](https://www.linkedin.com/company/kreosphere
 
 ### Gaming Mode
 
-Gaming mode exists because I was playing [**VALORANT**](https://www.linkedin.com/company/valorantgg/) while training the model. Holding W-A-S-D makes it try to predict English from input like `wwwwadssa`, so the runtime auto-pauses prediction and returns the keyboard to solid white.
+Gaming mode prevents game controls from feeding the language model. Press **Esc + W** to toggle it deliberately: it clears the current context and ignores captured keys until you press the hotkey again. While enabled, `Esc`, `W`, `A`, `S`, and `D` display prediction-rank colors 1–5 as a persistent status indicator; toggling off returns the keyboard to its normal white state. This avoids accidental activation from ordinary WASD movement or repeated keys.
 
 ### Why it matters:
 
@@ -173,7 +173,7 @@ The live application is intentionally more than a loop around `model.forward()`:
 - Backspace removes one character; Enter clears the context.
 - The context is clamped to the model's maximum sequence length.
 - Empty, NaN, or very low-confidence predictions return the board to white.
-- Four recent WASD events or five identical repeated keys activate a temporary gaming pause.
+- Press `Esc + W` to toggle gaming mode. It remains on until the same hotkey turns it off; `Esc` and `WASD` show rank colors 1–5 while it is on.
 - After the idle timeout, red prediction highlights are cleared.
 - By default the live process stays active indefinitely and clears prediction highlights after 6 seconds of inactivity. Use `--idle-timeout SECONDS` to change the delay, or `0` to disable expiration.
 - A lockfile prevents multiple processes from fighting over the same keyboard.
@@ -200,9 +200,8 @@ The runtime ranks physical keys, not only raw characters. If several predicted c
 
 All user-tunable runtime settings live in [`config.json`](config.json). Edit that file to change:
 
-- The five ranked prediction colors and the unhighlighted background color.
-- Brightness, top-k count, context length, idle expiration, and gaming pause duration.
-- WASD/repeat detection thresholds, debounce timing, queue size, checkpoint, and keyboard profile.
+- The five ranked prediction colors and the unhighlighted background color. These are rank shades: rank 1 through rank 5, not five global brightness settings.
+- Brightness, top-k count, context length, idle expiration, gaming hotkey, debounce timing, queue size, checkpoint, and keyboard profile. `runtime.brightness` is an RGB multiplier from `0.0` (off) to `1.0` (full intensity); values above `1.0` are not a brighter device mode.
 - Optional probability/attention output and hardware keepalive behavior.
 
 Command-line options override config values for one run. The Windows startup entry loads `config.json` directly, so changes apply after restarting the background predictor.
@@ -253,8 +252,8 @@ python predict_and_light.py --top-k 3 --brightness 0.5
 # Start with an initial context
 python predict_and_light.py --seed "The quick "
 
-# Disable the automatic WASD pause
-python predict_and_light.py --no-auto-pause-wasd
+# Use Esc plus a different printable ASCII key
+python predict_and_light.py --gaming-hotkey esc w
 ```
 
 The default checkpoint is `checkpoints/model_final.npz`. Use `--checkpoint PATH` to load another compatible checkpoint. `--profile NAME` selects a JSON profile from `profiles/`.
