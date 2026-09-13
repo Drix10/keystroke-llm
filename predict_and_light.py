@@ -132,9 +132,12 @@ def configure_windows_startup(install: bool):
             config_path = os.path.abspath(DEFAULT_CONFIG_PATH)
             executable_path = sys.executable
             if os.name == "nt" and os.path.basename(executable_path).lower() == "python.exe":
-                windowless_executable = os.path.join(os.path.dirname(executable_path), "pythonw.exe")
-                if os.path.exists(windowless_executable):
-                    executable_path = windowless_executable
+                python_dir = os.path.dirname(executable_path)
+                for candidate_name in ("pythonw.exe", "keystroke-llm.exe"):
+                    candidate_path = os.path.join(python_dir, candidate_name)
+                    if os.path.exists(candidate_path):
+                        executable_path = candidate_path
+                        break
             command = f'"{executable_path}" "{os.path.abspath(__file__)}" --config "{config_path}"'
             winreg.SetValueEx(run_key, STARTUP_VALUE_NAME, 0, winreg.REG_SZ, command)
             print(f"Installed Windows startup entry: {command}")
